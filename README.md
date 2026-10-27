@@ -2,6 +2,8 @@
 
 **Practice your first production outage before you're responsible for a real one.**
 
+**Live demo:** https://incident-room-demo.fly.dev
+
 You're on call for checkout at a fictional shop. Checkout is failing for about one in five customers. You investigate with metrics, logs, deploy history, feature flags and a runbook, choose a fix, and watch the simulated service respond. Then **Pressure Replay** runs the same outage with one thing changed: the release shipped an irreversible database migration, so rolling back now breaks every checkout.
 
 ## How it works
@@ -22,7 +24,7 @@ You're on call for checkout at a fictional shop. Checkout is failing for about o
 | Nemotron teammate (discusses hypotheses, asks for evidence) | Working; mocked tests, and checked with live Nemotron calls in a local browser |
 | Nemotron interpretation layer for the debrief (cites the facts, kept separate from them) | Working; mocked tests, and checked with live Nemotron calls in a local browser |
 | Plan Stress Test (Nemotron translates and explains; the simulator runs the plan) | Working; unit and API tests with a mocked model, and checked with live calls in a local browser |
-| Hosted demo | Not deployed yet |
+| Hosted demo | Live at https://incident-room-demo.fly.dev (Fly.io, one machine) |
 
 ## Run it locally
 
