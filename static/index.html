@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incident Room</title>
+<meta name="description" content="Practice your first production outage before you're responsible for a real one.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Incident Room</a>
+  <span class="topbar-note">Simulated incident · fictional company</span>
+</header>
+
+<main>
+  <!-- Intro -->
+  <section id="intro" class="intro">
+    <p class="eyebrow">On-call practice</p>
+    <h1>Practice your first production outage before you're responsible for a real one.</h1>
+    <p class="lede">You're on call. Checkout is failing. Investigate with real-looking metrics, logs and deploys, choose a fix, and watch the
+      simulated service respond. Then replay the same outage with one thing changed.</p>
+    <div class="how">
+      <div><span>1</span><h3>Investigate</h3><p>Every look takes a simulated minute. Customers keep failing while you work.</p></div>
+      <div><span>2</span><h3>Act</h3><p>Rollbacks, flags and config changes take time to roll out, and can make things worse.</p></div>
+      <div><span>3</span><h3>Debrief</h3><p>Every point in the debrief links to the exact step in your timeline that it's based on.</p></div>
+    </div>
+    <div class="briefing" id="intro-briefing"></div>
+    <button id="start" class="btn primary big">Take the page</button>
+    <p class="fineprint">The outcome of every action is decided by a fixed simulation, not by an AI model, so the same choices always lead to the same result.</p>
+  </section>
+
+  <!-- Console -->
+  <section id="console" hidden>
+    <div class="statusbar" aria-live="polite">
+      <div class="sb-item"><span class="sb-label">Scenario</span><strong id="sb-title"></strong></div>
+      <div class="sb-item"><span class="sb-label">Clock</span><strong id="sb-clock" class="mono"></strong><small id="sb-elapsed"></small></div>
+      <div class="sb-item"><span class="sb-label">Status</span><strong id="sb-status" class="pill"></strong></div>
+      <div class="sb-item"><span class="sb-label">Checkout errors</span><strong id="sb-error" class="mono big-number"></strong></div>
+      <div class="sb-item"><span class="sb-label">Failed checkouts (your shift)</span><strong id="sb-failed" class="mono"></strong></div>
+    </div>
+    <div id="pending" class="pending" hidden></div>
+    <div class="alert" id="alert"></div>
+
+    <div class="grid">
+      <div class="panel investigate">
+        <div class="panel-head">
+          <h2>Investigate</h2>
+          <span class="hint">Each look takes 1 simulated minute</span>
+        </div>
+        <div class="tools" role="toolbar" aria-label="Investigation tools">
+          <div class="tool-group"><span>Metrics</span>
+            <button data-look="metrics" data-arg="checkout">checkout-api</button>
+            <button data-look="metrics" data-arg="tax">tax-service</button>
+            <button data-look="metrics" data-arg="payments">payments</button>
+            <button data-look="metrics" data-arg="database">orders-db</button>
+          </div>
+          <div class="tool-group"><span>Logs</span>
+            <button data-look="logs" data-arg="checkout-api">checkout-api</button>
+            <button data-look="logs" data-arg="tax-service">tax-service</button>
+            <button data-look="logs" data-arg="payments-gateway">payments</button>
+            <button data-look="logs" data-arg="orders-db">orders-db</button>
+          </div>
+          <div class="tool-group"><span>Changes</span>
+            <button data-look="deploys">Deploys</button>
+            <button data-look="flags">Feature flags</button>
+            <button data-look="runbook">Runbook</button>
+          </div>
+        </div>
+        <div id="look" class="look">
+          <div class="look-empty">Pick something to look at. Your first minute starts now.</div>
+        </div>
+      </div>
+
+      <div class="side">
+        <div class="panel act">
+          <div class="panel-head"><h2>Act</h2><span class="hint">Changes take time to roll out</span></div>
+          <div id="actions" class="actions"></div>
+          <details class="status-compose">
+            <summary>Post a status update</summary>
+            <label for="status-text" class="sr-only">Status update text</label>
+            <textarea id="status-text" rows="3" maxlength="400"></textarea>
+            <button id="post-status" class="btn">Post update</button>
+          </details>
+          <div class="act-foot">
+            <button id="wait" class="btn">Watch dashboards (2 min)</button>
+            <button id="resolve" class="btn danger">Declare resolved</button>
+          </div>
+        </div>
+        <div class="panel timeline-panel">
+          <div class="panel-head"><h2>Timeline</h2><span class="hint">Recorded exactly as it happened</span></div>
+          <ol id="timeline" class="timeline"></ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Debrief -->
+  <section id="debrief" hidden>
+    <p class="eyebrow" id="db-eyebrow">Debrief</p>
+    <h1 id="db-headline"></h1>
+    <div class="stats" id="db-stats"></div>
+    <div class="debrief-grid">
+      <div class="panel">
+        <div class="panel-head"><h2>What happened</h2><span class="source">Facts from the simulation · each one cites your timeline</span></div>
+        <ul id="db-facts" class="facts"></ul>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Your timeline</h2></div>
+        <ol id="db-timeline" class="timeline"></ol>
+      </div>
+    </div>
+    <div id="db-compare" class="panel compare" hidden>
+      <div class="panel-head"><h2>Original run vs. replay</h2><span class="source">From recorded stats only</span></div>
+      <table><thead><tr><th scope="col"></th><th scope="col">The page</th><th scope="col">Rollback unsafe</th></tr></thead><tbody id="db-compare-rows"></tbody></table>
+    </div>
+    <div class="replay-cta" id="replay-cta">
+      <div>
+        <p class="eyebrow">Pressure Replay</p>
+        <h2>Same outage. This time, rollback is unsafe.</h2>
+        <p>Release v2.14.0 shipped an irreversible database migration. Rolling back will break every checkout. Find another way.</p>
+      </div>
+      <button id="replay" class="btn primary big">Start the replay</button>
+    </div>
+    <div class="db-foot"><button id="restart" class="btn">Start over</button></div>
+  </section>
+</main>
+
+<div id="toast" role="status" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.env
+*.log
+
+# Local coordination notes (kept on disk, not published)
+AGENTS.md
+HANDOFF.md
+WORK_LOG.md
