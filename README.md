@@ -4,17 +4,17 @@
 
 **Live demo:** https://incident-room-demo.fly.dev
 
-You're on call for checkout at a fictional shop. Checkout is failing for about one in five customers. You investigate with metrics, logs, deploy history, feature flags and a runbook, choose a fix, and watch the simulated service respond. Then **Pressure Replay** runs the same outage with one thing changed: the release shipped an irreversible database migration, so rolling back now breaks every checkout.
+You're on call for checkout at a fictional shop. Checkout is failing for about one in five customers. You investigate with metrics, logs, deploy history, feature flags and a runbook, choose a fix, and watch the simulated service respond. Then **Pressure Replay** runs the same outage with one thing changed: the release shipped an irreversible database migration, so rolling back now makes about 98% of checkouts fail.
 
 ## How it works
 
 - **A fixed simulation decides every outcome.** Service state (release, flags, timeouts, pods, payment route) drives each minute's metrics and logs. The same choices always produce the same result, so recovery is something you can demonstrate, not something a model declares.
 - **Time costs customers.** Every look takes a simulated minute; changes take minutes to roll out; failed checkouts keep counting.
 - **The replay lives in the scenario.** In the replay, the release notes, database logs and the rollback's actual effect all change. It is not a prompt instruction.
-- **A Nemotron teammate coaches, it doesn't solve.** You can talk the incident through with an AI teammate (NVIDIA Nemotron via Nebius Token Factory). It only sees what you have seen: the briefing, the runbook, the status bar and your own timeline, never the hidden cause. It answers with questions about evidence and risk, and it never decides whether an action works. Talking costs no simulated time and is not written to the timeline.
-- **Evidence-linked debrief.** Every point in the debrief cites the timeline events it is based on (for example `E4`), and the replay is compared with the original run using recorded stats only.
-- **Stress-test your plan.** After the debrief, write what you would do next time in plain English ("if checkout fails after a deploy, roll back"). Nemotron translates it into simulator steps, keeping your plan as written, even its mistakes, and lists anything it had to assume or could not translate. You approve the steps; the simulator runs that exact plan on fresh copies of both versions of the outage (migration reversible / irreversible) over the same 20 minutes and shows the results side by side. Revise the plan and compare it with the previous one. "Your plan worked once. Here is the condition that breaks it."
-- **The AI interpretation is checked, and kept apart from the facts.** After the shift, Nemotron writes a short "Coach's read" (what to keep doing, what to change next time). Every point must cite fact IDs (`F2`, or `C1` for comparison rows). The server drops any point that cites an unknown ID or uses a number or time that is not in the cited facts, their timeline events or the runbook. It is shown in its own panel, labelled as AI.
+- **A Nemotron teammate coaches, it doesn't solve.** You can talk the incident through with an AI teammate (NVIDIA Nemotron via Nebius Token Factory). It receives the briefing, the runbook, the status bar and your own timeline, never the hidden cause, and it is prompted to coach with questions about evidence and risk. It never decides whether an action works. Talking costs no simulated time and is not written to the timeline.
+- **Evidence-linked debrief.** The debrief is built from recorded simulation data and links the relevant timeline events where there are any (for example `E4`); the replay is compared with the original run using recorded stats only.
+- **Stress-test your plan.** After the debrief, write what you would do next time in plain English ("if checkout fails after a deploy, roll back"). Nemotron is instructed to translate it into simulator steps as written, mistakes included, and to list anything it had to assume or could not translate. You inspect and approve the steps; the simulator runs that exact plan on fresh copies of both versions of the outage (migration reversible / irreversible) over the same 20 minutes and shows the results side by side. Revise the plan and compare it with the previous one. "Your plan worked once. Here is the condition that breaks it."
+- **The AI interpretation is checked, and kept apart from the facts.** After the shift, Nemotron writes a short "Coach's read" (what to keep doing, what to change next time). Every point must cite fact IDs (`F2`, or `C1` for comparison rows). The server drops any point that cites an unknown ID, uses a number or time absent from the cited facts, their referenced events, comparison rows or the runbook, or has the wrong tone. These are partial checks: the AI cannot change outcomes, but its reasoning can still be wrong, so it is shown in its own panel, labelled as AI.
 
 ## How Nemotron and Nebius Token Factory are used
 
@@ -22,13 +22,13 @@ Every model call goes to **NVIDIA Nemotron 3.5 Super** (`nvidia/Nemotron-3.5-Sup
 
 | Job | When | Calls | What keeps it honest |
 |---|---|---|---|
-| **Teammate** | During the shift | 1 per message (`max_tokens` 220, at most 12 per run) | Sees only the briefing, runbook, status bar and the trainee's own timeline, never the hidden cause. Must answer with a question, not a list of steps. |
+| **Teammate** | During the shift | 1 per message (`max_tokens` 220, at most 12 per run) | Receives only the briefing, runbook, status bar and the trainee's own timeline, never the hidden cause. Prompted to answer with a question, not a list of steps (a prompt rule, not enforced in code). |
 | **Coach's read** | After the shift | 1 per run (`max_tokens` 450) | Each point must cite fact IDs; points that cite unknown IDs, use numbers not in the cited facts, or have the wrong tone (a "keep" point needs a good fact, a "change" point a gap) are dropped. |
-| **Plan translator** | Stress test | 1 per plan (`max_tokens` 600, at most 4 per run) | Must keep the trainee's plan as written. Output is strict JSON that is validated before anything runs (only simulator steps, one migration if/else, no nesting, ≤ 8 steps per path). Assumptions and unsupported parts are shown to the trainee, who approves the steps. |
+| **Plan translator** | Stress test | 1 per plan (`max_tokens` 600, at most 4 per run) | Instructed to keep the trainee's plan as written. Output is strict JSON that is validated before anything runs (only simulator steps, one migration if/else, no nesting, ≤ 8 steps per path); a status update the trainee did not ask for is removed in code. Assumptions and unsupported parts are shown to the trainee, who approves the steps. |
 | **Plan explainer** | After a plan runs | 1 per plan (`max_tokens` 450) | Same citation and number checks, with facts scoped per version (`A-F2`, `B-F3`). |
 
 - **Thinking is turned off** (`chat_template_kwargs: {"enable_thinking": false}`). In our first test with thinking on, 589 of 600 output tokens went to hidden reasoning and the reply was cut off after one sentence (2.15 s). With thinking off, the same request answered in 0.54 s with 23 tokens.
-- **No retries, 20-second timeout.** A failed call shows a short message; the simulation keeps working without the AI.
+- **No automatic retries, 20-second timeout.** A failed call shows a short message and the simulation keeps working; a failed Coach's read allows one manual "Try again".
 - **Every call is paid through a spending guard** (see [Spending limits](#spending-limits)).
 
 ## Status
