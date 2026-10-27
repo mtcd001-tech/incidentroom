@@ -81,9 +81,9 @@ fly auth login
 fly apps create <your-app-name>          # then put the same name in fly.toml → app
 fly volumes create budget_data --size 1 --region iad -a <your-app-name>
 fly secrets set NEBIUS_API_KEY=<key> VISITOR_SALT=<random text> JUDGE_CODE_SHA256=<sha256 of the judge code> -a <your-app-name>
-fly deploy
-fly ssh console -a <your-app-name> -C "python budget.py init --spent-before <USD spent so far>"
-fly ssh console -a <your-app-name> -C "python budget.py report"
+fly deploy --ha=false                    # one machine only (plain `fly deploy` adds a spare)
+fly ssh console -a <your-app-name> -C "python /app/budget.py init --spent-before <USD spent so far>"
+fly ssh console -a <your-app-name> -C "python /app/budget.py report"
 ```
 
 Until the spending record is created, the site works and the AI features say they are paused. Keep exactly one machine (`fly scale count 1`): visitor limits and the one-call-at-a-time rule live in that process.
