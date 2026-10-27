@@ -16,14 +16,30 @@ You're on call for checkout at a fictional shop. Checkout is failing for about o
 - **Stress-test your plan.** After the debrief, write what you would do next time in plain English ("if checkout fails after a deploy, roll back"). Nemotron translates it into simulator steps, keeping your plan as written, even its mistakes, and lists anything it had to assume or could not translate. You approve the steps; the simulator runs that exact plan on fresh copies of both versions of the outage (migration reversible / irreversible) over the same 20 minutes and shows the results side by side. Revise the plan and compare it with the previous one. "Your plan worked once. Here is the condition that breaks it."
 - **The AI interpretation is checked, and kept apart from the facts.** After the shift, Nemotron writes a short "Coach's read" (what to keep doing, what to change next time). Every point must cite fact IDs (`F2`, or `C1` for comparison rows). The server drops any point that cites an unknown ID or uses a number or time that is not in the cited facts, their timeline events or the runbook. It is shown in its own panel, labelled as AI.
 
+## How Nemotron and Nebius Token Factory are used
+
+Every model call goes to **NVIDIA Nemotron 3.5 Super** (`nvidia/Nemotron-3.5-Super-VL`) through **Nebius Token Factory**'s OpenAI-compatible `chat/completions` endpoint. The model has four jobs, and none of them decides an outcome:
+
+| Job | When | Calls | What keeps it honest |
+|---|---|---|---|
+| **Teammate** | During the shift | 1 per message (`max_tokens` 220, at most 12 per run) | Sees only the briefing, runbook, status bar and the trainee's own timeline, never the hidden cause. Must answer with a question, not a list of steps. |
+| **Coach's read** | After the shift | 1 per run (`max_tokens` 450) | Each point must cite fact IDs; points that cite unknown IDs, use numbers not in the cited facts, or have the wrong tone (a "keep" point needs a good fact, a "change" point a gap) are dropped. |
+| **Plan translator** | Stress test | 1 per plan (`max_tokens` 600, at most 4 per run) | Must keep the trainee's plan as written. Output is strict JSON that is validated before anything runs (only simulator steps, one migration if/else, no nesting, ≤ 8 steps per path). Assumptions and unsupported parts are shown to the trainee, who approves the steps. |
+| **Plan explainer** | After a plan runs | 1 per plan (`max_tokens` 450) | Same citation and number checks, with facts scoped per version (`A-F2`, `B-F3`). |
+
+- **Thinking is turned off** (`chat_template_kwargs: {"enable_thinking": false}`). In our first test with thinking on, 589 of 600 output tokens went to hidden reasoning and the reply was cut off after one sentence (2.15 s). With thinking off, the same request answered in 0.54 s with 23 tokens.
+- **No retries, 20-second timeout.** A failed call shows a short message; the simulation keeps working without the AI.
+- **Every call is paid through a spending guard** (see [Spending limits](#spending-limits)).
+
 ## Status
 
 | Part | State |
 |---|---|
 | Simulation, both scenario variants, timeline, debrief facts, replay comparison | Working; covered by unit and API tests |
-| Nemotron teammate (discusses hypotheses, asks for evidence) | Working; mocked tests, and checked with live Nemotron calls in a local browser |
-| Nemotron interpretation layer for the debrief (cites the facts, kept separate from them) | Working; mocked tests, and checked with live Nemotron calls in a local browser |
-| Plan Stress Test (Nemotron translates and explains; the simulator runs the plan) | Working; unit and API tests with a mocked model, and checked with live calls in a local browser |
+| Nemotron teammate (discusses hypotheses, asks for evidence) | Working; mocked tests, and checked with live Nemotron calls locally and on the hosted demo |
+| Nemotron Coach's read for the debrief (cites the facts, kept separate from them) | Working; mocked tests, and checked with live Nemotron calls locally and on the hosted demo |
+| Plan Stress Test (Nemotron translates and explains; the simulator runs the plan) | Working; unit and API tests with a mocked model, and checked live locally and on the hosted demo (including a phone-width layout) |
+| Spending guard ($5 total, daily share, judge pool, visitor limits) | Working; unit tests, and checked on the hosted demo (charge recorded, record survives a restart) |
 | Hosted demo | Live at https://incident-room-demo.fly.dev (Fly.io, one machine) |
 
 ## Run it locally
@@ -72,7 +88,7 @@ Every model call first reserves its worst-case cost (prompt bytes as an upper bo
 
 Each visitor can run one model call at a time and start 30 shifts per hour.
 
-How the call is made: one OpenAI-compatible `chat/completions` request per message, with Nemotron's thinking turned off (`chat_template_kwargs: {"enable_thinking": false}`) for fast, short replies, `max_tokens` 220, a 20-second timeout and no retries. Plans: one compile call per plan (600 `max_tokens`, at most 4 plans per run) and one explanation call per plan. The model's plan must pass strict validation before anything runs: only simulator steps, at most one `if migration_irreversible` decision, no nesting, at most 8 steps per path. Each run allows 12 teammate messages. The debrief read is one call per run (450 `max_tokens`), saved once it succeeds; if it fails, the trainee can press "Try again" once.
+The Coach's read is saved once it succeeds; if it fails, the trainee can press "Try again" once. Each plan's explanation is tried once.
 
 ## Deploy (Fly.io)
 
