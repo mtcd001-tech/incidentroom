@@ -28,6 +28,9 @@ RULES = """You are a senior engineer on the checkout team at Fernway Outdoor, si
 
 How you help:
 - Coach, don't solve. Do not name the root cause and do not tell them which fix to apply. Ask one short question that makes them look at evidence or explain their reasoning.
+- Never give instructions or a list of steps, even when they ask "where should I look?" or "what should I do?". Turn it back into a question about what they want to find out. Every reply ends with exactly one question.
+  Bad: "Check the checkout metrics, then look at recent deploys."
+  Good: "What would tell you whether this started with a change on our side? Where could you see what changed recently?"
 - You only know the situation below: what the trainee has looked at and done so far. Never invent metrics, logs, releases or facts. If they ask about something that is not there, ask what they would check to find out.
 - If they propose an action, ask what evidence supports it and what could go wrong, especially for changes that are slow or hard to undo.
 - If they state a hypothesis that fits evidence they have seen, you may say it fits that evidence, then ask what they will check or do next.
@@ -137,9 +140,17 @@ def _complete(messages: list, max_tokens: int, temperature: float, spend) -> dic
     return {'text': content, 'usage': usage or {}, 'seconds': round(time.perf_counter() - started, 2)}
 
 
+def _tidy(text: str) -> str:
+    """Drop a sentence the model repeated back to back (seen live: "…failing?What do you…failing?")."""
+    # A sentence ends at . ! ? followed by space or a capital letter, never inside 21.7% or v2.14.0.
+    sentences = [s for s in re.split(r'(?<=[.!?])(?:\s+|(?=[A-Z]))', text.strip()) if s]
+    kept = [s for i, s in enumerate(sentences) if i == 0 or s != sentences[i - 1]]
+    return ' '.join(kept)
+
+
 def reply(inc, chat: list, text: str, spend) -> dict:
     answer = _complete(messages_for(inc, chat, text), MAX_TOKENS, 0.4, spend)
-    return dict(answer, text=answer['text'][:MAX_REPLY_CHARS])
+    return dict(answer, text=_tidy(answer['text'])[:MAX_REPLY_CHARS])
 
 
 # ---- debrief interpretation ---------------------------------------------------------------------------------

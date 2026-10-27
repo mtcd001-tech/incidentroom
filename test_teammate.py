@@ -87,6 +87,14 @@ class TeammateTests(unittest.TestCase):
         self.assertGreater(spend.log[0][2], 0)
         self.assertEqual(spend.log[1][2], {'prompt_tokens': 900, 'completion_tokens': 20})
 
+    def test_repeated_sentence_is_removed(self):
+        doubled = 'The runbook says to confirm the impact first. What do you want to see?What do you want to see?'
+        self.assertEqual(teammate._tidy(doubled), 'The runbook says to confirm the impact first. What do you want to see?')
+        self.assertEqual(teammate._tidy('Why? Why not?'), 'Why? Why not?')
+        evidence = 'Errors are 21.7% since v2.14.0 went out. What changed in v2.14.0?'
+        self.assertEqual(teammate._tidy(evidence), evidence)
+        self.assertEqual(teammate._tidy('It is at 0.5%.It is at 0.5%. Why?'), 'It is at 0.5%. Why?')
+
     def test_budget_refusal_never_calls_the_model(self):
         post = fake_post()
         with mock.patch.object(teammate.httpx, 'post', post):
