@@ -159,7 +159,7 @@ def compare(first: dict, second: dict) -> list[dict]:
         return 'none' if value is None else f'{value} min after the page'
 
     a, b = first['stats'], second['stats']
-    return [
+    rows = [
         {'label': 'Time to healthy checkout', 'first': minutes(a['minutes_to_mitigate']), 'second': minutes(b['minutes_to_mitigate'])},
         {'label': 'Failed checkouts during the shift', 'first': f"{a['failed']:,}", 'second': f"{b['failed']:,}"},
         {'label': 'First change', 'first': change(a['first_change']), 'second': change(b['first_change'])},
@@ -170,3 +170,4 @@ def compare(first: dict, second: dict) -> list[dict]:
         {'label': 'First status update', 'first': status(a['first_status_minutes_after_page']),
          'second': status(b['first_status_minutes_after_page'])},
     ]
+    return [dict(row, id=f'C{i}') for i, row in enumerate(rows, 1)]

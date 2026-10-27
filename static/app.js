@@ -5,7 +5,7 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&
 const clock = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (value, unit) => unit === 'ms' ? `${Number(value).toLocaleString('en-US')} ms` : unit === '%' ? `${value}%` : String(value);
 
-const state = { id: null, data: null, look: null, confirm: null, busy: false, briefings: null, asking: null };
+const state = { id: null, data: null, look: null, confirm: null, busy: false, briefings: null, asking: null, reading: null };
 
 function remember(id) {
   try { id ? sessionStorage.setItem('incident-run', id) : sessionStorage.removeItem('incident-run'); } catch (_) { /* storage unavailable */ }
@@ -215,15 +215,50 @@ function renderDebrief() {
   ];
   $('#db-stats').innerHTML = stats.map(([k, val]) => `<div class="stat"><span>${esc(k)}</span><b>${esc(val)}</b></div>`).join('');
   const tones = { good: 'Went well', gap: 'Gap', info: 'Fact' };
-  $('#db-facts').innerHTML = d.facts.map((f) => `<li class="fact ${esc(f.tone)}"><span class="tone">${esc(tones[f.tone])}</span><p>${esc(f.text)}</p>
+  $('#db-facts').innerHTML = d.facts.map((f) => `<li class="fact ${esc(f.tone)}" id="db-fact-${esc(f.id)}"><span class="tone">${esc(f.id)} · ${esc(tones[f.tone])}</span><p>${esc(f.text)}</p>
     ${f.events.length ? `<div class="refs">${f.events.map((id) => `<button class="ref" data-ref="${esc(id)}">${esc(id)}</button>`).join('')}</div>` : ''}</li>`).join('');
   renderTimeline($('#db-timeline'), v.events, false);
   const compare = data.comparison;
   $('#db-compare').hidden = !compare;
   if (compare) {
-    $('#db-compare-rows').innerHTML = compare.map((r) => `<tr><td>${esc(r.label)}</td><td>${esc(r.first)}</td><td>${esc(r.second)}</td></tr>`).join('');
+    $('#db-compare-rows').innerHTML = compare.map((r) => `<tr id="db-compare-${esc(r.id)}"><td><span class="fid">${esc(r.id)}</span> ${esc(r.label)}</td><td>${esc(r.first)}</td><td>${esc(r.second)}</td></tr>`).join('');
   }
   $('#replay-cta').hidden = v.variant !== 'A';
+  renderRead();
+  if (!data.interpretation && !data.interpret_tried && (!state.reading || state.reading.id !== data.id)) readDebrief(data.id);
+}
+
+function renderRead() {
+  const data = state.data, body = $('#db-read-body');
+  const reading = state.reading && state.reading.id === data.id ? state.reading : null;
+  if (data.interpretation) {
+    const kinds = { keep: 'Keep doing', change: 'Next time' };
+    body.innerHTML = `<ul class="facts">${data.interpretation.points.map((p) => `<li class="fact ${p.kind === 'keep' ? 'good' : 'next'}">
+      <span class="tone">${esc(kinds[p.kind])}</span><p>${esc(p.text)}</p>
+      <div class="refs">${p.facts.map((id) => `<button class="ref" data-cite="${esc(id)}">${esc(id)}</button>`).join('')}</div></li>`).join('')}</ul>`;
+  } else if (reading && !reading.error) {
+    body.innerHTML = '<p class="read-note">Nemotron is reading your timeline and the facts…</p>';
+  } else {
+    const error = reading ? reading.error : 'The AI read is not available for this run.';
+    body.innerHTML = `<p class="read-note">${esc(error)} The facts above are complete without it.</p>
+      ${data.interpret_left > 0 ? '<button class="btn" id="read-again">Try again</button>' : ''}`;
+  }
+}
+
+async function readDebrief(id) {
+  state.reading = { id, error: null };
+  renderRead();
+  try {
+    const data = await api(`/api/runs/${id}/interpret`, {});
+    if (state.id !== id) return;
+    state.reading = null;
+    accept(data);
+  } catch (err) {
+    if (state.id !== id) return;
+    state.data.interpret_left = Math.max(0, state.data.interpret_left - 1);
+    state.reading = { id, error: err.message };
+    renderRead();
+  }
 }
 
 // ---------- commands --------------------------------------------------------------------------------------
@@ -265,7 +300,15 @@ document.addEventListener('click', (event) => {
     if (state.confirm.action === 'resolve') resolve();
     else act(state.confirm.action, state.confirm.arg, '');
   } else if (t.id === 'confirm-no') { state.confirm = null; renderActions(); }
-  else if (t.dataset.ref) {
+  else if (t.id === 'read-again') readDebrief(state.id);
+  else if (t.dataset.cite) {
+    const item = document.getElementById(`db-fact-${t.dataset.cite}`) || document.getElementById(`db-compare-${t.dataset.cite}`);
+    if (item) {
+      item.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      item.classList.add('flash');
+      setTimeout(() => item.classList.remove('flash'), 1600);
+    }
+  } else if (t.dataset.ref) {
     const item = document.getElementById(`db-timeline-${t.dataset.ref}`);
     if (item) {
       item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });

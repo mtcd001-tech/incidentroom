@@ -189,6 +189,11 @@ h3 { font-size: 15px; margin: 6px 0 4px; }
 .refs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ref { font: 12px var(--mono); border: 1px solid var(--line); background: transparent; border-radius: 4px; padding: 1px 7px; color: var(--muted); }
 .ref:hover { border-color: var(--amber); color: var(--amber); }
+.read { margin-top: 16px; }
+.read-note { color: var(--muted); margin: 0 0 10px; }
+.fact.next { border-left-color: var(--amber); }
+.fact.flash, .compare tr.flash td { background: var(--amber-bg); }
+.fid { font: 12px var(--mono); color: var(--faint); margin-right: 4px; }
 .compare { margin-top: 16px; }
 .compare table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .compare th, .compare td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }

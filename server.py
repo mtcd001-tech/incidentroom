@@ -22,6 +22,7 @@ PORT = int(os.getenv('INCIDENT_PORT', '8780'))
 MAX_RUNS = 500
 RUN_TTL = 3 * 60 * 60
 MAX_CHAT = 12   # trainee messages per run; each one is a paid model call
+MAX_INTERPRET = 2   # debrief interpretation attempts per run (the second only when the trainee clicks "Try again")
 
 runs: dict[str, dict] = {}
 
@@ -71,12 +72,21 @@ def _payload(run: dict, result: dict | None = None) -> dict:
     body = {'id': run['id'], 'view': inc.view(), 'result': result, 'previous': run['previous'],
             'chat': run['chat'], 'chat_left': max(0, MAX_CHAT - asked)}
     if inc.ended:
-        summary = facts.summarize(inc)
-        body['debrief'] = summary
-        previous = runs.get(run['previous']) if run['previous'] else None
-        if previous and previous['incident'].ended:
-            body['comparison'] = facts.compare(facts.summarize(previous['incident']), summary)
+        body['debrief'], comparison = _debrief(run)
+        if comparison:
+            body['comparison'] = comparison
+        body['interpretation'] = run['interpretation']
+        body['interpret_left'] = MAX_INTERPRET - run['interpret_tries']
+        body['interpret_tried'] = run['interpret_tries'] > 0   # the page asks automatically only before the first try
     return body
+
+
+def _debrief(run: dict) -> tuple[dict, list | None]:
+    summary = facts.summarize(run['incident'])
+    previous = runs.get(run['previous']) if run['previous'] else None
+    if previous and previous['incident'].ended:
+        return summary, facts.compare(facts.summarize(previous['incident']), summary)
+    return summary, None
 
 
 def _command(run_id: str, fn):
@@ -103,7 +113,7 @@ def new_run(body: NewRun):
     _prune()
     previous = body.previous if body.previous in runs else None
     run = {'id': secrets.token_urlsafe(16), 'incident': sim.Incident(body.variant), 'previous': previous, 'chat': [],
-           'touched': time.time()}
+           'interpretation': None, 'interpret_tries': 0, 'touched': time.time()}
     runs[run['id']] = run
     return _payload(run)
 
@@ -151,6 +161,25 @@ def chat(run_id: str, body: Chat):
         raise HTTPException(503, str(exc))
     run['chat'] += [{'role': 'trainee', 'text': text, 'clock': S.clock(inc.now)},
                     {'role': 'teammate', 'text': answer['text'], 'clock': S.clock(inc.now)}]
+    return _payload(run)
+
+
+@app.post('/api/runs/{run_id}/interpret')
+def interpret(run_id: str):
+    """Nemotron's reading of the debrief. Generated once per run; every point is checked against the cited facts."""
+    run = _get(run_id)
+    if not run['incident'].ended:
+        raise HTTPException(400, 'The debrief is ready when the shift ends.')
+    if run['interpretation']:
+        return _payload(run)
+    if run['interpret_tries'] >= MAX_INTERPRET:
+        raise HTTPException(429, 'No more AI debrief attempts for this run.')
+    run['interpret_tries'] += 1
+    summary, comparison = _debrief(run)
+    try:
+        run['interpretation'] = teammate.interpret(run['incident'], summary, comparison)
+    except teammate.TeammateError as exc:
+        raise HTTPException(503, str(exc))
     return _payload(run)
 
 

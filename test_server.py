@@ -93,6 +93,33 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(reply.call_count, server.MAX_CHAT)
         self.client.post(f'/api/runs/{rid}/resolve')
         self.assertEqual(self.client.post(f'/api/runs/{rid}/chat', json={'text': 'hi'}).status_code, 400)
+    def test_interpretation_is_made_once_and_attempts_are_capped(self):
+        rid = self.start()['id']
+        self.assertEqual(self.client.post(f'/api/runs/{rid}/interpret').status_code, 400)
+        done = self.client.post(f'/api/runs/{rid}/resolve').json()
+        self.assertIsNone(done['interpretation'])
+        self.assertEqual(done['interpret_left'], server.MAX_INTERPRET)
+        result = {'points': [{'kind': 'change', 'text': 'Post a status update.', 'facts': ['F1']}], 'dropped': 0}
+        with mock.patch.object(teammate, 'interpret', return_value=result) as interpret:
+            first = self.client.post(f'/api/runs/{rid}/interpret').json()
+            again = self.client.post(f'/api/runs/{rid}/interpret').json()
+        interpret.assert_called_once()
+        self.assertEqual(first['interpretation'], result)
+        self.assertEqual(again['interpretation'], result)
+
+        other = self.start()['id']
+        self.client.post(f'/api/runs/{other}/resolve')
+        with mock.patch.object(teammate, 'interpret', side_effect=teammate.TeammateError('down')) as interpret:
+            codes = [self.client.post(f'/api/runs/{other}/interpret').status_code for _ in range(server.MAX_INTERPRET + 1)]
+        self.assertEqual(codes, [503] * server.MAX_INTERPRET + [429])
+        self.assertEqual(interpret.call_count, server.MAX_INTERPRET)
+
+    def test_replay_comparison_rows_have_ids(self):
+        rid = self.start()['id']
+        self.client.post(f'/api/runs/{rid}/resolve')
+        bid = self.start('B', rid)['id']
+        final = self.client.post(f'/api/runs/{bid}/resolve').json()
+        self.assertEqual([r['id'] for r in final['comparison']], [f'C{i}' for i in range(1, 7)])
 
 
 if __name__ == '__main__':
