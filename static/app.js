@@ -14,8 +14,14 @@ function recall() {
   try { return sessionStorage.getItem('incident-run'); } catch (_) { return null; }
 }
 
+function judgeCode() {
+  try { return sessionStorage.getItem('judge-code') || ''; } catch (_) { return ''; }
+}
+
 async function api(path, body) {
-  const options = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const headers = body === undefined ? {} : { 'Content-Type': 'application/json' };
+  if (judgeCode()) headers['X-Judge-Code'] = judgeCode();
+  const options = body === undefined ? { headers } : { method: 'POST', headers, body: JSON.stringify(body) };
   const res = await fetch(path, options);
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof json.detail === 'string' ? json.detail : `Request failed (${res.status}).`);
@@ -322,6 +328,17 @@ document.addEventListener('click', (event) => {
 });
 
 $('#start').addEventListener('click', () => start('A'));
+$('#judge-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const code = $('#judge-code').value.trim();
+  try { code ? sessionStorage.setItem('judge-code', code) : sessionStorage.removeItem('judge-code'); } catch (_) { /* storage unavailable */ }
+  $('#judge-code').value = '';
+  try {
+    const ok = (await api('/api/judge')).judge;
+    $('#judge-state').textContent = ok ? 'Judge code accepted for this tab.' : 'That code was not accepted.';
+    if (!ok) sessionStorage.removeItem('judge-code');
+  } catch (err) { $('#judge-state').textContent = err.message; }
+});
 $('#post-status').addEventListener('click', () => act('status', null, $('#status-text').value));
 $('#wait').addEventListener('click', () => run(async () => accept(await api(`/api/runs/${state.id}/wait`, {}))));
 $('#resolve').addEventListener('click', () => {

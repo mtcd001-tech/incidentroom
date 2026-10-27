@@ -42,14 +42,38 @@ Create a `.env` file next to `server.py`:
 NEBIUS_API_KEY=your-nebius-token-factory-key
 ```
 
-Optional overrides: `NEBIUS_MODEL` (default `nvidia/Nemotron-3.5-Super-VL`) and `NEBIUS_BASE_URL` (default `https://api.tokenfactory.us-north1.nebius.com/v1/`). Without a key the simulation works normally and the teammate panel shows that it is unavailable.
+Then create the spending record once (it is never created automatically, so a lost record turns the AI off instead of resetting the budget):
+
+```powershell
+.venv\Scripts\python budget.py init --spent-before 0.02   # USD already spent on development calls
+.venv\Scripts\python budget.py report                     # spending so far
+```
+
+Optional overrides: `NEBIUS_MODEL` (default `nvidia/Nemotron-3.5-Super-VL`) and `NEBIUS_BASE_URL` (default `https://api.tokenfactory.us-north1.nebius.com/v1/`). Without a key or a spending record the simulation works normally and the teammate panel shows that the AI is unavailable.
+
+### Spending limits
+
+Every model call first reserves its worst-case cost (prompt bytes as an upper bound on tokens, plus `max_tokens`) in a SQLite record, then settles at the real cost from the returned usage; if the outcome is uncertain, the reservation stays counted. Settings (environment variables, defaults in brackets):
+
+| Variable | Meaning |
+|---|---|
+| `BUDGET_DB` [`data/budget.db`] | The spending record. On a host, put it on a persistent volume. |
+| `BUDGET_TOTAL_USD` [5] | Hard total, including `--spent-before` |
+| `BUDGET_JUDGE_USD` [1] | Reserved for judges (used with a valid judge code) |
+| `BUDGET_END_DATE` [2026-12-15] | The public share is spread evenly per UTC day until this date |
+| `VISITOR_DAILY_CALLS` [25], `JUDGE_DAILY_CALLS` [200] | Model calls per visitor per day, failed calls included |
+| `JUDGE_CODE_SHA256` | SHA-256 hex of the judge code; judges enter the code on the start page (sent as a header) |
+| `TRUST_FLY_CLIENT_IP` | Set to `1` only behind Fly.io's proxy, to identify visitors by `Fly-Client-IP` |
+| `VISITOR_SALT` | Secret salt for the hashed visitor IDs |
+
+Each visitor can run one model call at a time and start 30 shifts per hour.
 
 How the call is made: one OpenAI-compatible `chat/completions` request per message, with Nemotron's thinking turned off (`chat_template_kwargs: {"enable_thinking": false}`) for fast, short replies, `max_tokens` 220, a 20-second timeout and no retries. Each run allows 12 teammate messages. The debrief read is one call per run (450 `max_tokens`), saved once it succeeds; if it fails, the trainee can press "Try again" once.
 
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m unittest test_sim test_server test_teammate
+.venv\Scripts\python -m unittest test_sim test_server test_teammate test_budget
 ```
 
 The tests replace the model with a fake, so they never make a paid call.
@@ -62,6 +86,7 @@ The tests replace the model with a fake, so they never make a paid call.
 | `sim.py` | Deterministic simulation: state, metrics, logs, actions, timeline |
 | `facts.py` | Debrief facts with event citations, and the run-vs-replay comparison |
 | `teammate.py` | Nemotron teammate and debrief read: what the model may see, its rules, the Token Factory call, and the citation check |
+| `budget.py` | Spending guard: reserve before each model call, settle after, daily/total/judge caps |
 | `server.py` | FastAPI app and JSON API |
 | `static/` | The web interface |
 

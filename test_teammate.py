@@ -6,6 +6,7 @@ from unittest import mock
 
 import httpx
 
+import budget
 import facts
 import sim
 import teammate
@@ -18,6 +19,20 @@ class FakeResponse:
 
     def json(self):
         return {'choices': [{'message': {'content': self.content}}], 'usage': {'prompt_tokens': 900, 'completion_tokens': 20}}
+
+
+class FakeSpend:
+    def __init__(self, refuse=False):
+        self.refuse, self.log = refuse, []
+
+    def reserve(self, model, cost):
+        self.log.append(('reserve', model, cost))
+        if self.refuse:
+            raise budget.BudgetError("The AI teammate has reached today's limit.")
+        return 7
+
+    def finish(self, ticket, model, usage):
+        self.log.append(('finish', ticket, usage))
 
 
 def fake_post(response=None, error=None):
@@ -56,9 +71,9 @@ class TeammateTests(unittest.TestCase):
     def test_one_call_with_thinking_off_and_capped_tokens(self):
         inc = sim.Incident('A')
         chat = [{'role': 'trainee', 'text': 'Errors are up.'}, {'role': 'teammate', 'text': 'Since when?'}]
-        post = fake_post()
+        post, spend = fake_post(), FakeSpend()
         with mock.patch.object(teammate.httpx, 'post', post):
-            answer = teammate.reply(inc, chat, 'Should I roll back?')
+            answer = teammate.reply(inc, chat, 'Should I roll back?', spend)
         self.assertEqual(answer['text'], 'What does the error rate tell you?')
         self.assertEqual(len(post.calls), 1)
         url, kwargs = post.calls[0]
@@ -68,21 +83,33 @@ class TeammateTests(unittest.TestCase):
         self.assertEqual(body['max_tokens'], teammate.MAX_TOKENS)
         self.assertEqual([m['role'] for m in body['messages']], ['system', 'user', 'assistant', 'user'])
         self.assertEqual(body['messages'][-1]['content'], 'Should I roll back?')
+        self.assertEqual([entry[0] for entry in spend.log], ['reserve', 'finish'])
+        self.assertGreater(spend.log[0][2], 0)
+        self.assertEqual(spend.log[1][2], {'prompt_tokens': 900, 'completion_tokens': 20})
+
+    def test_budget_refusal_never_calls_the_model(self):
+        post = fake_post()
+        with mock.patch.object(teammate.httpx, 'post', post):
+            with self.assertRaises(teammate.TeammateError):
+                teammate.reply(sim.Incident('A'), [], 'Hello?', FakeSpend(refuse=True))
+        self.assertEqual(post.calls, [])
 
     def test_failures_raise_once_without_retrying(self):
         inc = sim.Incident('A')
         for post in (fake_post(error=httpx.ConnectTimeout('slow')), fake_post(FakeResponse(status=500)),
                      fake_post(FakeResponse(content='  '))):
+            spend = FakeSpend()
             with mock.patch.object(teammate.httpx, 'post', post):
                 with self.assertRaises(teammate.TeammateError):
-                    teammate.reply(inc, [], 'Hello?')
+                    teammate.reply(inc, [], 'Hello?', spend)
             self.assertEqual(len(post.calls), 1)
+            self.assertEqual([entry[0] for entry in spend.log], ['reserve', 'finish'])
 
     def test_missing_key_never_calls_the_model(self):
         post = fake_post()
         with mock.patch.dict(os.environ, {'NEBIUS_API_KEY': ''}), mock.patch.object(teammate.httpx, 'post', post):
             with self.assertRaises(teammate.TeammateError):
-                teammate.reply(sim.Incident('A'), [], 'Hello?')
+                teammate.reply(sim.Incident('A'), [], 'Hello?', FakeSpend())
         self.assertEqual(post.calls, [])
 
 
@@ -154,7 +181,7 @@ class InterpretationTests(unittest.TestCase):
                                       {'kind': 'keep', 'text': f'You acted at {acted}.', 'facts': [first['id']]}]})
         post = fake_post(FakeResponse(content='```json\n' + good + '\n```'))
         with mock.patch.object(teammate.httpx, 'post', post):
-            result = teammate.interpret(inc, summary)
+            result = teammate.interpret(inc, summary, None, FakeSpend())
         self.assertEqual(len(post.calls), 1)
         prompt = post.calls[0][1]['json']['messages'][1]['content']
         self.assertIn(f"F1 [{summary['facts'][0]['tone']}]", prompt)
@@ -163,7 +190,7 @@ class InterpretationTests(unittest.TestCase):
         bad = json.dumps({'points': [{'kind': 'change', 'text': 'You lost 99,999 orders.', 'facts': ['F1']}]})
         with mock.patch.object(teammate.httpx, 'post', fake_post(FakeResponse(content=bad))):
             with self.assertRaises(teammate.TeammateError):
-                teammate.interpret(inc, summary)
+                teammate.interpret(inc, summary, None, FakeSpend())
 
 
 if __name__ == '__main__':

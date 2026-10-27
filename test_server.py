@@ -1,3 +1,5 @@
+import hashlib
+import os
 import unittest
 from unittest import mock
 
@@ -10,6 +12,7 @@ import teammate
 class ServerTests(unittest.TestCase):
     def setUp(self):
         server.runs.clear()
+        server._new_runs.clear()
         self.client = TestClient(server.app)
 
     def start(self, variant='A', previous=None):
@@ -113,6 +116,41 @@ class ServerTests(unittest.TestCase):
             codes = [self.client.post(f'/api/runs/{other}/interpret').status_code for _ in range(server.MAX_INTERPRET + 1)]
         self.assertEqual(codes, [503] * server.MAX_INTERPRET + [429])
         self.assertEqual(interpret.call_count, server.MAX_INTERPRET)
+
+    def test_judge_code_selects_the_judge_pool(self):
+        code = 'correct-horse-battery-staple-1234'
+        digest = hashlib.sha256(code.encode()).hexdigest()
+        answer = {'text': 'Why?', 'usage': {}, 'seconds': 0.1}
+        with mock.patch.dict(os.environ, {'JUDGE_CODE_SHA256': digest}):
+            self.assertTrue(self.client.get('/api/judge', headers={'X-Judge-Code': code}).json()['judge'])
+            self.assertFalse(self.client.get('/api/judge', headers={'X-Judge-Code': 'wrong'}).json()['judge'])
+            rid = self.start()['id']
+            with mock.patch.object(teammate, 'reply', return_value=answer) as reply:
+                self.client.post(f'/api/runs/{rid}/chat', json={'text': 'hi'}, headers={'X-Judge-Code': code})
+                self.client.post(f'/api/runs/{rid}/chat', json={'text': 'hi'})
+        pools = [call.args[3].pool for call in reply.call_args_list]
+        self.assertEqual(pools, ['judge', 'public'])
+        with mock.patch.dict(os.environ, {'JUDGE_CODE_SHA256': ''}):
+            self.assertFalse(self.client.get('/api/judge', headers={'X-Judge-Code': code}).json()['judge'])
+
+    def test_fly_client_ip_is_trusted_only_when_enabled(self):
+        def visitor(headers, trust):
+            with mock.patch.dict(os.environ, {'TRUST_FLY_CLIENT_IP': '1' if trust else ''}):
+                request = mock.Mock(headers=headers, client=mock.Mock(host='10.0.0.1'))
+                return server._visitor(request)
+        self.assertEqual(visitor({'fly-client-ip': '1.2.3.4'}, False), visitor({}, False))
+        self.assertNotEqual(visitor({'fly-client-ip': '1.2.3.4'}, True), visitor({'fly-client-ip': '5.6.7.8'}, True))
+
+    def test_new_shifts_are_rate_limited_per_visitor(self):
+        server._new_runs.clear()
+        old = server.RUNS_PER_HOUR
+        server.RUNS_PER_HOUR = 2
+        try:
+            codes = [self.client.post('/api/runs', json={'variant': 'A'}).status_code for _ in range(3)]
+        finally:
+            server.RUNS_PER_HOUR = old
+            server._new_runs.clear()
+        self.assertEqual(codes, [200, 200, 429])
 
     def test_replay_comparison_rows_have_ids(self):
         rid = self.start()['id']

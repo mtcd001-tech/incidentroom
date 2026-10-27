@@ -1,15 +1,20 @@
+import hashlib
+import hmac
 import os
 import secrets
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import budget
 import facts
 import scenario as S
 import sim
@@ -23,8 +28,11 @@ MAX_RUNS = 500
 RUN_TTL = 3 * 60 * 60
 MAX_CHAT = 12   # trainee messages per run; each one is a paid model call
 MAX_INTERPRET = 2   # debrief interpretation attempts per run (the second only when the trainee clicks "Try again")
+RUNS_PER_HOUR = 30  # new runs per visitor per hour
 
 runs: dict[str, dict] = {}
+_new_runs: dict[str, deque] = {}
+_new_runs_lock = threading.Lock()
 
 app = FastAPI(title='Incident Room', docs_url=None, redoc_url=None)
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
@@ -48,6 +56,35 @@ class Act(BaseModel):
 
 class Chat(BaseModel):
     text: str = Field(min_length=1, max_length=500)
+
+
+def _visitor(request: Request) -> str:
+    """A salted hash of the client IP. Fly-Client-IP is trusted only when the app runs behind Fly's proxy."""
+    ip = request.headers.get('fly-client-ip') if os.getenv('TRUST_FLY_CLIENT_IP') == '1' else None
+    ip = ip or (request.client.host if request.client else 'unknown')
+    return hashlib.sha256((os.getenv('VISITOR_SALT', '') + ip).encode()).hexdigest()[:20]
+
+
+def _is_judge(request: Request) -> bool:
+    code, expected = request.headers.get('x-judge-code', ''), os.getenv('JUDGE_CODE_SHA256', '').strip().lower()
+    return bool(code and expected) and hmac.compare_digest(hashlib.sha256(code.encode()).hexdigest(), expected)
+
+
+def _spend(request: Request) -> budget.Spend:
+    return budget.Spend('judge' if _is_judge(request) else 'public', _visitor(request))
+
+
+def _allow_new_run(visitor: str):
+    now = time.time()
+    with _new_runs_lock:
+        recent = _new_runs.setdefault(visitor, deque())
+        while recent and recent[0] < now - 3600:
+            recent.popleft()
+        if len(recent) >= RUNS_PER_HOUR:
+            raise HTTPException(429, 'Too many new shifts from your connection. Please wait a little.')
+        recent.append(now)
+        if len(_new_runs) > 5000:
+            _new_runs.clear()
 
 
 def _prune():
@@ -108,8 +145,14 @@ def scenario_info():
     return {'variants': S.VARIANT_INFO}
 
 
+@app.get('/api/judge')
+def judge(request: Request):
+    return {'judge': _is_judge(request)}
+
+
 @app.post('/api/runs')
-def new_run(body: NewRun):
+def new_run(body: NewRun, request: Request):
+    _allow_new_run(_visitor(request))
     _prune()
     previous = body.previous if body.previous in runs else None
     run = {'id': secrets.token_urlsafe(16), 'incident': sim.Incident(body.variant), 'previous': previous, 'chat': [],
@@ -144,7 +187,7 @@ def resolve(run_id: str):
 
 
 @app.post('/api/runs/{run_id}/chat')
-def chat(run_id: str, body: Chat):
+def chat(run_id: str, body: Chat, request: Request):
     """Ask the Nemotron teammate. Talking costs no simulated time and is not written to the timeline."""
     run = _get(run_id)
     inc = run['incident']
@@ -156,7 +199,7 @@ def chat(run_id: str, body: Chat):
     if sum(1 for m in run['chat'] if m['role'] == 'trainee') >= MAX_CHAT:
         raise HTTPException(429, 'You have used all teammate messages for this run.')
     try:
-        answer = teammate.reply(inc, run['chat'], text)
+        answer = teammate.reply(inc, run['chat'], text, _spend(request))
     except teammate.TeammateError as exc:
         raise HTTPException(503, str(exc))
     run['chat'] += [{'role': 'trainee', 'text': text, 'clock': S.clock(inc.now)},
@@ -165,7 +208,7 @@ def chat(run_id: str, body: Chat):
 
 
 @app.post('/api/runs/{run_id}/interpret')
-def interpret(run_id: str):
+def interpret(run_id: str, request: Request):
     """Nemotron's reading of the debrief. Generated once per run; every point is checked against the cited facts."""
     run = _get(run_id)
     if not run['incident'].ended:
@@ -177,7 +220,7 @@ def interpret(run_id: str):
     run['interpret_tries'] += 1
     summary, comparison = _debrief(run)
     try:
-        run['interpretation'] = teammate.interpret(run['incident'], summary, comparison)
+        run['interpretation'] = teammate.interpret(run['incident'], summary, comparison, _spend(request))
     except teammate.TeammateError as exc:
         raise HTTPException(503, str(exc))
     return _payload(run)

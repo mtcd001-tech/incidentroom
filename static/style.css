@@ -56,6 +56,11 @@ h3 { font-size: 15px; margin: 6px 0 4px; }
 .briefing strong { display: block; color: var(--red); font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
 .fineprint { color: var(--faint); font-size: 13px; margin-top: 14px; max-width: 70ch; }
 
+.judge { margin-top: 18px; color: var(--muted); font-size: 14px; }
+.judge summary { cursor: pointer; color: var(--faint); }
+.judge form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.judge input { background: #0a0d10; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-height: 40px; color: var(--ink); min-width: 0; flex: 1 1 220px; }
+
 /* Status bar */
 .statusbar { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr 1.3fr; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .sb-item { background: var(--panel); padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }

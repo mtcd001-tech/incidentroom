@@ -10,6 +10,7 @@ import time
 
 import httpx
 
+import budget
 import scenario as S
 
 DEFAULT_BASE_URL = 'https://api.tokenfactory.us-north1.nebius.com/v1/'
@@ -47,6 +48,10 @@ Return only JSON, no other text: {"points": [{"kind": "keep" or "change", "text"
 
 class TeammateError(RuntimeError):
     pass
+
+
+def model_name() -> str:
+    return os.getenv('NEBIUS_MODEL', DEFAULT_MODEL)
 
 
 def situation(inc) -> str:
@@ -87,38 +92,51 @@ def messages_for(inc, chat: list, text: str) -> list:
     return [{'role': 'system', 'content': f'{RULES}\n\n{situation(inc)}'}, *history, {'role': 'user', 'content': text}]
 
 
-def _complete(messages: list, max_tokens: int, temperature: float) -> dict:
-    """One chat/completions call with thinking off. Raises TeammateError on any failure; never retries."""
+def _complete(messages: list, max_tokens: int, temperature: float, spend) -> dict:
+    """One chat/completions call with thinking off, paid for through `spend` (a budget.Spend).
+
+    The worst-case cost is reserved before the request and settled from the returned usage afterwards.
+    Raises TeammateError on any failure; never retries."""
     key = os.getenv('NEBIUS_API_KEY', '').strip()
     if not key:
         raise TeammateError('The AI teammate is not configured on this server.')
     base = os.getenv('NEBIUS_BASE_URL', DEFAULT_BASE_URL).rstrip('/') + '/'
+    model = model_name()
+    try:
+        ticket = spend.reserve(model, budget.max_cost(model, messages, max_tokens))
+    except budget.BudgetError as exc:
+        raise TeammateError(str(exc))
+    usage = None
     started = time.perf_counter()
     try:
-        res = httpx.post(base + 'chat/completions', headers={'Authorization': f'Bearer {key}'}, timeout=TIMEOUT, json={
-            'model': os.getenv('NEBIUS_MODEL', DEFAULT_MODEL),
-            'messages': messages,
-            'max_tokens': max_tokens,
-            'temperature': temperature,
-            'chat_template_kwargs': {'enable_thinking': False},
-        })
-    except httpx.HTTPError:
-        raise TeammateError('The AI teammate did not answer. The simulation keeps running; try again later.')
-    if res.status_code != 200:
-        raise TeammateError(f'The AI teammate is unavailable right now (HTTP {res.status_code}).')
-    try:
-        data = res.json()
-        content = data['choices'][0]['message']['content'] or ''
-    except (ValueError, KeyError, IndexError, TypeError):
-        raise TeammateError('The AI teammate sent an unreadable answer.')
+        try:
+            res = httpx.post(base + 'chat/completions', headers={'Authorization': f'Bearer {key}'}, timeout=TIMEOUT, json={
+                'model': model,
+                'messages': messages,
+                'max_tokens': max_tokens,
+                'temperature': temperature,
+                'chat_template_kwargs': {'enable_thinking': False},
+            })
+        except httpx.HTTPError:
+            raise TeammateError('The AI teammate did not answer. The simulation keeps running; try again later.')
+        if res.status_code != 200:
+            raise TeammateError(f'The AI teammate is unavailable right now (HTTP {res.status_code}).')
+        try:
+            data = res.json()
+            usage = data.get('usage') if isinstance(data.get('usage'), dict) else None
+            content = data['choices'][0]['message']['content'] or ''
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            raise TeammateError('The AI teammate sent an unreadable answer.')
+    finally:
+        spend.finish(ticket, model, usage)
     content = content.split('</think>')[-1].strip()
     if not content:
         raise TeammateError('The AI teammate sent an empty answer.')
-    return {'text': content, 'usage': data.get('usage') or {}, 'seconds': round(time.perf_counter() - started, 2)}
+    return {'text': content, 'usage': usage or {}, 'seconds': round(time.perf_counter() - started, 2)}
 
 
-def reply(inc, chat: list, text: str) -> dict:
-    answer = _complete(messages_for(inc, chat, text), MAX_TOKENS, 0.4)
+def reply(inc, chat: list, text: str, spend) -> dict:
+    answer = _complete(messages_for(inc, chat, text), MAX_TOKENS, 0.4, spend)
     return dict(answer, text=answer['text'][:MAX_REPLY_CHARS])
 
 
@@ -176,10 +194,10 @@ def check_points(raw: str, sources: dict, common: str = '', tones: dict | None =
     return kept[:MAX_POINTS], dropped + max(0, len(kept) - MAX_POINTS)
 
 
-def interpret(inc, summary: dict, comparison: list | None = None) -> dict:
+def interpret(inc, summary: dict, comparison: list | None, spend) -> dict:
     messages = [{'role': 'system', 'content': INTERPRET_RULES},
                 {'role': 'user', 'content': debrief_context(inc, summary, comparison)}]
-    answer = _complete(messages, INTERPRET_TOKENS, 0.3)
+    answer = _complete(messages, INTERPRET_TOKENS, 0.3, spend)
     events = {e['id']: e for e in inc.events}
     # A fact's evidence is its own text plus the timeline events it cites.
     sources = {f['id']: ' '.join([f['text'], *(f"{events[r]['clock']} {events[r]['label']} {events[r]['detail']}"

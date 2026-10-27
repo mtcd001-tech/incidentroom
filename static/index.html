@@ -31,6 +31,15 @@
     <div class="briefing" id="intro-briefing"></div>
     <button id="start" class="btn primary big">Take the page</button>
     <p class="fineprint">The outcome of every action is decided by a fixed simulation, not by an AI model, so the same choices always lead to the same result.</p>
+    <details class="judge">
+      <summary>Judging this project? Enter your judge code</summary>
+      <form id="judge-form">
+        <label for="judge-code" class="sr-only">Judge code</label>
+        <input id="judge-code" type="password" autocomplete="off" maxlength="200" placeholder="Judge code from the submission">
+        <button class="btn" type="submit">Use code</button>
+        <span id="judge-state" role="status"></span>
+      </form>
+    </details>
   </section>
 
   <!-- Console -->
