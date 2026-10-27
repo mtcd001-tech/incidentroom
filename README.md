@@ -72,6 +72,22 @@ Each visitor can run one model call at a time and start 30 shifts per hour.
 
 How the call is made: one OpenAI-compatible `chat/completions` request per message, with Nemotron's thinking turned off (`chat_template_kwargs: {"enable_thinking": false}`) for fast, short replies, `max_tokens` 220, a 20-second timeout and no retries. Plans: one compile call per plan (600 `max_tokens`, at most 4 plans per run) and one explanation call per plan. The model's plan must pass strict validation before anything runs: only simulator steps, at most one `if migration_irreversible` decision, no nesting, at most 8 steps per path. Each run allows 12 teammate messages. The debrief read is one call per run (450 `max_tokens`), saved once it succeeds; if it fails, the trainee can press "Try again" once.
 
+## Deploy (Fly.io)
+
+One always-on machine (shared-cpu-1x, 256 MB) with a 1 GB volume for the spending record, about $2.35 a month. The Docker image contains only the app code, never `.env`.
+
+```powershell
+fly auth login
+fly apps create <your-app-name>          # then put the same name in fly.toml → app
+fly volumes create budget_data --size 1 --region iad -a <your-app-name>
+fly secrets set NEBIUS_API_KEY=<key> VISITOR_SALT=<random text> JUDGE_CODE_SHA256=<sha256 of the judge code> -a <your-app-name>
+fly deploy
+fly ssh console -a <your-app-name> -C "python budget.py init --spent-before <USD spent so far>"
+fly ssh console -a <your-app-name> -C "python budget.py report"
+```
+
+Until the spending record is created, the site works and the AI features say they are paused. Keep exactly one machine (`fly scale count 1`): visitor limits and the one-call-at-a-time rule live in that process.
+
 ## Tests
 
 ```powershell

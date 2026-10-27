@@ -25,7 +25,7 @@ ROOT = Path(__file__).parent
 load_dotenv(ROOT / '.env')
 HOST = os.getenv('INCIDENT_HOST', '127.0.0.1')
 PORT = int(os.getenv('INCIDENT_PORT', '8780'))
-MAX_RUNS = 500
+MAX_RUNS = 200   # in-memory runs; sized for a 256 MB machine
 RUN_TTL = 3 * 60 * 60
 MAX_CHAT = 12   # trainee messages per run; each one is a paid model call
 MAX_INTERPRET = 2   # debrief interpretation attempts per run (the second only when the trainee clicks "Try again")
