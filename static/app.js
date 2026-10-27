@@ -5,7 +5,7 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&
 const clock = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (value, unit) => unit === 'ms' ? `${Number(value).toLocaleString('en-US')} ms` : unit === '%' ? `${value}%` : String(value);
 
-const state = { id: null, data: null, look: null, confirm: null, busy: false, briefings: null };
+const state = { id: null, data: null, look: null, confirm: null, busy: false, briefings: null, asking: null };
 
 function remember(id) {
   try { id ? sessionStorage.setItem('incident-run', id) : sessionStorage.removeItem('incident-run'); } catch (_) { /* storage unavailable */ }
@@ -62,6 +62,7 @@ function render() {
   renderStatus();
   renderLook();
   renderActions();
+  renderChat();
   renderTimeline($('#timeline'), data.view.events, true);
 }
 
@@ -177,6 +178,18 @@ function renderActions() {
   if (!text.value) text.value = 'Investigating: some customers cannot complete checkout since about 14:03. We are working on a fix and will update within 15 minutes.';
 }
 
+function renderChat() {
+  const d = state.data;
+  const items = d.chat.map((m) => `<li class="msg ${esc(m.role)}"><span class="who">${m.role === 'trainee' ? 'You' : 'Teammate'} · ${esc(m.clock)}</span><p>${esc(m.text)}</p></li>`);
+  if (state.asking) items.push(`<li class="msg trainee"><span class="who">You</span><p>${esc(state.asking)}</p></li><li class="msg teammate typing"><p>Thinking…</p></li>`);
+  const list = $('#chat');
+  list.innerHTML = items.length ? items.join('')
+    : '<li class="chat-empty">Talk it through. Your teammate only knows what you have looked at, so it answers with questions, not the fix. Talking takes no simulated time.</li>';
+  list.scrollTop = list.scrollHeight;
+  $('#chat-left').textContent = d.chat_left === 1 ? '1 message left' : `${d.chat_left} messages left`;
+  $('#chat-send').disabled = !d.chat_left || !!state.asking;
+}
+
 function renderTimeline(list, events, follow) {
   if (!events.length) {
     list.innerHTML = '<li class="timeline-empty">Nothing yet. Your first look or action will appear here.</li>';
@@ -222,6 +235,15 @@ const start = (variant, previous) => run(async () => {
 const look = (tool, arg) => run(async () => { state.confirm = null; accept(await api(`/api/runs/${state.id}/look`, { tool, arg })); });
 const act = (action, arg, text) => run(async () => { state.confirm = null; accept(await api(`/api/runs/${state.id}/act`, { action, arg, text })); });
 const resolve = () => run(async () => { state.confirm = null; accept(await api(`/api/runs/${state.id}/resolve`, {})); });
+const ask = (text) => run(async () => {
+  state.asking = text;
+  $('#chat-text').value = '';
+  renderChat();
+  try { accept(await api(`/api/runs/${state.id}/chat`, { text })); } catch (err) { $('#chat-text').value = text; throw err; } finally {
+    state.asking = null;
+    if (state.data && !state.data.view.ended) renderChat();
+  }
+});
 
 document.addEventListener('click', (event) => {
   const t = event.target.closest('button');
@@ -260,6 +282,14 @@ $('#resolve').addEventListener('click', () => {
   state.confirm = { action: 'resolve', arg: null, label: 'Declare the incident resolved and end your shift', delay: 0 };
   renderActions();
   $('#confirm-yes').focus();
+});
+$('#chat-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const text = $('#chat-text').value.trim();
+  if (text) ask(text);
+});
+$('#chat-text').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('#chat-form').requestSubmit(); }
 });
 $('#replay').addEventListener('click', () => start('B', state.id));
 $('#restart').addEventListener('click', () => { state.data = null; state.id = null; state.look = null; remember(null); show('intro'); });

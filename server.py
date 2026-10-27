@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 import facts
 import scenario as S
 import sim
+import teammate
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / '.env')
@@ -20,6 +21,7 @@ HOST = os.getenv('INCIDENT_HOST', '127.0.0.1')
 PORT = int(os.getenv('INCIDENT_PORT', '8780'))
 MAX_RUNS = 500
 RUN_TTL = 3 * 60 * 60
+MAX_CHAT = 12   # trainee messages per run; each one is a paid model call
 
 runs: dict[str, dict] = {}
 
@@ -43,6 +45,10 @@ class Act(BaseModel):
     text: str = Field(default='', max_length=600)
 
 
+class Chat(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
 def _prune():
     cutoff = time.time() - RUN_TTL
     for run_id in [k for k, v in runs.items() if v['touched'] < cutoff]:
@@ -61,7 +67,9 @@ def _get(run_id: str) -> dict:
 
 def _payload(run: dict, result: dict | None = None) -> dict:
     inc = run['incident']
-    body = {'id': run['id'], 'view': inc.view(), 'result': result, 'previous': run['previous']}
+    asked = sum(1 for m in run['chat'] if m['role'] == 'trainee')
+    body = {'id': run['id'], 'view': inc.view(), 'result': result, 'previous': run['previous'],
+            'chat': run['chat'], 'chat_left': max(0, MAX_CHAT - asked)}
     if inc.ended:
         summary = facts.summarize(inc)
         body['debrief'] = summary
@@ -94,7 +102,8 @@ def scenario_info():
 def new_run(body: NewRun):
     _prune()
     previous = body.previous if body.previous in runs else None
-    run = {'id': secrets.token_urlsafe(16), 'incident': sim.Incident(body.variant), 'previous': previous, 'touched': time.time()}
+    run = {'id': secrets.token_urlsafe(16), 'incident': sim.Incident(body.variant), 'previous': previous, 'chat': [],
+           'touched': time.time()}
     runs[run['id']] = run
     return _payload(run)
 
@@ -122,6 +131,27 @@ def wait(run_id: str):
 @app.post('/api/runs/{run_id}/resolve')
 def resolve(run_id: str):
     return _command(run_id, lambda inc: inc.resolve())
+
+
+@app.post('/api/runs/{run_id}/chat')
+def chat(run_id: str, body: Chat):
+    """Ask the Nemotron teammate. Talking costs no simulated time and is not written to the timeline."""
+    run = _get(run_id)
+    inc = run['incident']
+    text = ' '.join(body.text.split())
+    if not text:
+        raise HTTPException(400, 'Type a message first.')
+    if inc.ended:
+        raise HTTPException(400, 'This shift has ended.')
+    if sum(1 for m in run['chat'] if m['role'] == 'trainee') >= MAX_CHAT:
+        raise HTTPException(429, 'You have used all teammate messages for this run.')
+    try:
+        answer = teammate.reply(inc, run['chat'], text)
+    except teammate.TeammateError as exc:
+        raise HTTPException(503, str(exc))
+    run['chat'] += [{'role': 'trainee', 'text': text, 'clock': S.clock(inc.now)},
+                    {'role': 'teammate', 'text': answer['text'], 'clock': S.clock(inc.now)}]
+    return _payload(run)
 
 
 if __name__ == '__main__':

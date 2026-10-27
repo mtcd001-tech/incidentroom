@@ -145,6 +145,19 @@ h3 { font-size: 15px; margin: 6px 0 4px; }
 .act-foot { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .act-foot .btn { flex: 1; }
 
+/* Teammate */
+.chat { list-style: none; margin: 0 0 10px; padding: 0; max-height: 300px; overflow-y: auto; display: grid; gap: 8px; }
+.msg { border-radius: 8px; padding: 8px 10px; font-size: 14px; max-width: 92%; }
+.msg p { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.msg .who { display: block; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+.msg.trainee { background: var(--panel-2); justify-self: end; }
+.msg.teammate { background: var(--blue-bg); color: #d6e7ff; justify-self: start; }
+.msg.typing p { color: var(--blue); }
+.chat-empty { color: var(--faint); font-size: 13px; }
+.chat-form textarea { width: 100%; background: #0a0d10; border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: vertical; }
+.chat-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 6px; }
+.chat-foot small { color: var(--faint); font-size: 12px; }
+
 /* Timeline */
 .timeline { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; display: grid; gap: 2px; }
 .timeline li { display: grid; grid-template-columns: 44px 42px 1fr; gap: 8px; padding: 6px 4px; border-radius: 6px; font-size: 13px; scroll-margin: 40px; }
@@ -156,7 +169,7 @@ h3 { font-size: 15px; margin: 6px 0 4px; }
 .timeline .k-action .what b { color: var(--amber); }
 .timeline .k-system .what b { color: var(--blue); }
 .timeline .k-comms .what b { color: var(--green); }
-.timeline-empty { color: var(--faint); font-size: 13px; padding: 8px 4px; }
+.timeline li.timeline-empty { display: block; color: var(--faint); font-size: 13px; padding: 8px 4px; }
 #debrief .timeline { max-height: 560px; }
 
 /* Debrief */

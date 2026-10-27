@@ -1,8 +1,10 @@
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
 import server
+import teammate
 
 
 class ServerTests(unittest.TestCase):
@@ -60,6 +62,37 @@ class ServerTests(unittest.TestCase):
             self.assertLessEqual(len(server.runs), 3)
         finally:
             server.MAX_RUNS = old_max
+
+    def test_chat_records_messages_without_using_simulated_time(self):
+        run = self.start()
+        rid, clock = run['id'], run['view']['clock']
+        self.assertEqual(run['chat'], [])
+        self.assertEqual(run['chat_left'], server.MAX_CHAT)
+        answer = {'text': 'What have you looked at so far?', 'usage': {}, 'seconds': 0.5}
+        with mock.patch.object(teammate, 'reply', return_value=answer) as reply:
+            res = self.client.post(f'/api/runs/{rid}/chat', json={'text': '  Should I   roll back? '}).json()
+        reply.assert_called_once()
+        self.assertEqual([m['role'] for m in res['chat']], ['trainee', 'teammate'])
+        self.assertEqual(res['chat'][0]['text'], 'Should I roll back?')
+        self.assertEqual(res['view']['clock'], clock)
+        self.assertEqual(res['view']['events'], [])
+        self.assertEqual(res['chat_left'], server.MAX_CHAT - 1)
+
+    def test_chat_limits_and_failures(self):
+        rid = self.start()['id']
+        with mock.patch.object(teammate, 'reply', side_effect=teammate.TeammateError('down')):
+            res = self.client.post(f'/api/runs/{rid}/chat', json={'text': 'hi'})
+        self.assertEqual(res.status_code, 503)
+        self.assertEqual(self.client.get(f'/api/runs/{rid}').json()['chat'], [])
+        self.assertEqual(self.client.post(f'/api/runs/{rid}/chat', json={'text': ''}).status_code, 422)
+        answer = {'text': 'Why?', 'usage': {}, 'seconds': 0.1}
+        with mock.patch.object(teammate, 'reply', return_value=answer) as reply:
+            for _ in range(server.MAX_CHAT):
+                self.assertEqual(self.client.post(f'/api/runs/{rid}/chat', json={'text': 'hi'}).status_code, 200)
+            self.assertEqual(self.client.post(f'/api/runs/{rid}/chat', json={'text': 'hi'}).status_code, 429)
+            self.assertEqual(reply.call_count, server.MAX_CHAT)
+        self.client.post(f'/api/runs/{rid}/resolve')
+        self.assertEqual(self.client.post(f'/api/runs/{rid}/chat', json={'text': 'hi'}).status_code, 400)
 
 
 if __name__ == '__main__':

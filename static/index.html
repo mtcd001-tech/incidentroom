@@ -90,6 +90,15 @@
             <button id="resolve" class="btn danger">Declare resolved</button>
           </div>
         </div>
+        <div class="panel teammate">
+          <div class="panel-head"><h2>Teammate</h2><span class="hint">AI (Nemotron) · coaches, never decides outcomes</span></div>
+          <ol id="chat" class="chat" aria-live="polite"></ol>
+          <form id="chat-form" class="chat-form">
+            <label for="chat-text" class="sr-only">Message your teammate</label>
+            <textarea id="chat-text" rows="2" maxlength="500" placeholder="Say what you think is going on, or what you plan to do"></textarea>
+            <div class="chat-foot"><small id="chat-left"></small><button id="chat-send" class="btn" type="submit">Ask</button></div>
+          </form>
+        </div>
         <div class="panel timeline-panel">
           <div class="panel-head"><h2>Timeline</h2><span class="hint">Recorded exactly as it happened</span></div>
           <ol id="timeline" class="timeline"></ol>
