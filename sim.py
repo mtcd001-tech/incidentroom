@@ -32,6 +32,11 @@ class CommandError(ValueError):
     pass
 
 
+def snapshot(config: dict) -> dict:
+    """An independent copy of the service config, so later changes never rewrite earlier minutes."""
+    return dict(config, flags=dict(config['flags']))
+
+
 def wobble(minute: int, key: int) -> float:
     """Deterministic noise in [-1, 1]."""
     return 0.6 * math.sin(minute * 1.31 + key * 2.17) + 0.4 * math.sin(minute * 0.47 + key)
@@ -93,6 +98,7 @@ class Incident:
         self.pending = []          # dicts: due, kind, arg, event
         self.restart_until = None
         self.history = {}
+        self.configs = {}          # minute -> config snapshot in effect that minute (logs are rendered from it)
         self.events = []
         self.failed = 0.0
         self.healthy_streak = 0
@@ -107,6 +113,7 @@ class Incident:
             before = minute < S.INCIDENT
             config = dict(self.config, version=S.OLD if before else S.NEW,
                           schema_dropped=self.variant == 'B' and minute >= S.INCIDENT)
+            self.configs[minute] = snapshot(config)
             self.history[minute] = metrics_for(minute, config)
 
     def _event(self, kind: str, name: str, label: str, detail: str = '', arg=None, minute=None) -> dict:
@@ -123,6 +130,7 @@ class Incident:
             self._apply_due()
             restarting = self.restart_until is not None and self.now < self.restart_until
             m = metrics_for(self.now, self.config, restarting)
+            self.configs[self.now] = snapshot(self.config)
             self.history[self.now] = m
             self.failed += S.TRAFFIC * m['error_rate'] / 100
             if m['error_rate'] <= S.HEALTHY:
@@ -318,7 +326,7 @@ class Incident:
     def _logs_view(self, service: str) -> dict:
         lines = []
         for minute in range(max(S.HISTORY_START, self.now - 4), self.now):
-            lines.extend(_log_lines(service, minute, self.history[minute], self.config, self.variant))
+            lines.extend(_log_lines(service, minute, self.history[minute], self.configs[minute], self.variant))
         if service == 'orders-db' and self.now - 8 <= S.DEPLOY < self.now:
             lines.append(_line(S.DEPLOY, 11, 'INFO', f"migration {S.MIGRATION[self.variant]['name']} applied in 3.1s: "
                                + S.MIGRATION[self.variant]['summary']))

@@ -204,11 +204,14 @@ function renderDebrief() {
   const data = state.data, v = data.view, d = data.debrief;
   const s = d.stats;
   $('#db-eyebrow').textContent = v.variant === 'B' ? 'Debrief · Pressure Replay' : 'Debrief';
-  $('#db-headline').textContent = s.minutes_to_mitigate !== null
-    ? `Checkout recovered ${s.minutes_to_mitigate} minutes into your shift.`
-    : 'Checkout was still failing when your shift ended.';
+  const mins = (n) => `${n} minute${n === 1 ? '' : 's'}`;
+  $('#db-headline').textContent = s.minutes_to_mitigate === null ? 'Checkout was still failing when your shift ended.'
+    : !s.healthy_at_end ? `Checkout recovered ${mins(s.minutes_to_mitigate)} in, but was not healthy when your shift ended.`
+    : s.relapsed ? 'Checkout recovered, broke again, and was healthy when your shift ended.'
+    : `Checkout recovered ${mins(s.minutes_to_mitigate)} into your shift.`;
   const stats = [
-    ['Time to healthy', s.minutes_to_mitigate !== null ? `${s.minutes_to_mitigate} min` : 'not reached'],
+    ['Time to healthy', s.minutes_to_mitigate === null ? 'not reached'
+      : `${s.minutes_to_mitigate} min${s.healthy_at_end ? '' : ' (then failed)'}`],
     ['Failed checkouts', s.failed.toLocaleString('en-US')],
     ['Checked before first change', String(s.looks_before_first_change)],
     ['Unhelpful changes', String(s.unhelpful_changes)],

@@ -40,6 +40,7 @@ Rules:
 - Every point must list the IDs of the facts it is based on: F1, F2 and so on, or C1, C2 for comparison rows.
 - Use only numbers and times that appear in the facts you cite, the timeline events those facts are based on, or the runbook. Do not invent events, numbers or causes.
 - Do not write fact or event IDs inside the text; put them in "facts".
+- A "keep" point must cite at least one fact tagged [good]; a "change" point must cite at least one fact tagged [gap].
 - At least one point should be something to change next time, unless the facts show nothing went wrong.
 Return only JSON, no other text: {"points": [{"kind": "keep" or "change", "text": "...", "facts": ["F1"]}]}"""
 
@@ -143,10 +144,11 @@ def _numbers(text: str) -> set:
     return {n.replace(',', '') for n in _NUMBER.findall(_REF.sub(' ', text))}
 
 
-def check_points(raw: str, sources: dict, common: str = '') -> tuple[list, int]:
+def check_points(raw: str, sources: dict, common: str = '', tones: dict | None = None) -> tuple[list, int]:
     """Keep only points that cite known sources and use no number missing from them (or from `common`, the runbook).
 
-    Returns (points, dropped)."""
+    With `tones` (fact ID -> good/gap/info), a "keep" point must cite a good fact and a "change" point a gap fact.
+    This is a partial filter: it cannot tell whether the cited facts really support the sentence. Returns (points, dropped)."""
     start, end = raw.find('{'), raw.rfind('}')
     try:
         points = json.loads(raw[start:end + 1])['points'] if start != -1 else None
@@ -157,14 +159,17 @@ def check_points(raw: str, sources: dict, common: str = '') -> tuple[list, int]:
     kept, dropped = [], 0
     for point in points:
         try:
-            kind = 'keep' if point.get('kind') == 'keep' else 'change'
+            kind = point.get('kind') if isinstance(point.get('kind'), str) else None
             text = re.sub(r'\s+([.,;:!?])', r'\1', ' '.join(_REF.sub(' ', str(point['text'])).split()))
             refs = list(dict.fromkeys(str(r).strip().upper() for r in point['facts']))
         except (AttributeError, KeyError, TypeError):
             dropped += 1
             continue
         cited = ' '.join(sources.get(r, '') for r in refs) + ' ' + common
-        if not text or not refs or any(r not in sources for r in refs) or not _numbers(text) <= _numbers(cited):
+        needed = {'keep': 'good', 'change': 'gap'}.get(kind)
+        if (not needed or not text or not refs or any(r not in sources for r in refs)
+                or not _numbers(text) <= _numbers(cited)
+                or (tones is not None and not any(tones.get(r) == needed for r in refs))):
             dropped += 1
             continue
         kept.append({'kind': kind, 'text': text[:400], 'facts': refs})
@@ -181,7 +186,8 @@ def interpret(inc, summary: dict, comparison: list | None = None) -> dict:
                                                for r in f['events'] if r in events)]) for f in summary['facts']}
     sources.update({r['id']: f"{r['label']}: {r['first']}, {r['second']}" for r in comparison or []})
     runbook = ' '.join(' '.join(steps) for _, steps in S.RUNBOOK)
-    points, dropped = check_points(answer['text'], sources, runbook)
+    tones = {f['id']: f['tone'] for f in summary['facts']}
+    points, dropped = check_points(answer['text'], sources, runbook, tones)
     if not points:
         raise TeammateError('The AI debrief could not be checked against the facts, so it is not shown.')
     return {'points': points, 'dropped': dropped}

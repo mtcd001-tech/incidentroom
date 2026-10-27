@@ -17,6 +17,25 @@ def _rate_around(inc, minute: int) -> tuple[float, float]:
     return before, after
 
 
+def _minutes(n: int) -> str:
+    return f"{n} minute{'' if n == 1 else 's'}"
+
+
+def _relapse(inc):
+    """First minute after the first recovery when errors went above the healthy threshold again, or None."""
+    if inc.mitigated_at is None:
+        return None
+    start = inc.mitigated_at + S.HEALTHY_STREAK
+    return next((m for m in range(start, inc.now) if inc.history[m]['error_rate'] > S.HEALTHY), None)
+
+
+def _streak_start(inc) -> int:
+    minute = inc.now - 1
+    while minute - 1 in inc.history and inc.history[minute - 1]['error_rate'] <= S.HEALTHY:
+        minute -= 1
+    return minute
+
+
 def summarize(inc) -> dict:
     events = inc.events
     by_id = {e['id']: e for e in events}
@@ -30,17 +49,29 @@ def summarize(inc) -> dict:
     def add(tone: str, text: str, refs: list):
         facts.append({'id': f'F{len(facts) + 1}', 'tone': tone, 'text': text, 'events': [r for r in refs if r]})
 
-    # Outcome
+    # Outcome: the first recovery is history; whether checkout stayed healthy to the end is reported separately.
     mitigated = next((e for e in events if e['name'] == 'mitigated'), None)
+    relapse = _relapse(inc)
+    healthy_at_end = inc.healthy_streak >= S.HEALTHY_STREAK
     if mitigated:
         cause = next((e for e in reversed(done) if e['minute'] <= inc.mitigated_at), None)
         cause_action = by_id[cause['arg']] if cause else None
-        text = (f'Checkout was healthy (under 1% errors for 3 minutes) from {S.clock(inc.mitigated_at)}, '
-                f'{_offset(inc.mitigated_at)} minutes into your shift')
+        text = (f"Checkout {'first became' if relapse else 'was'} healthy (under 1% errors for 3 minutes) from "
+                f'{S.clock(inc.mitigated_at)}, {_minutes(_offset(inc.mitigated_at))} into your shift')
         text += f", after: {cause_action['label']}." if cause_action else '.'
         add('good', text, [cause_action and cause_action['id'], cause and cause['id'], mitigated['id']])
-    else:
-        add('gap', f"Checkout was still failing at {inc.current()['error_rate']}% when the shift ended.", [])
+    if relapse:
+        # The latest change started at or before the relapse; some (restart) hurt before they finish rolling out.
+        trigger = next((e for e in reversed(changes) if e['minute'] <= relapse), None)
+        text = f"Errors came back at {S.clock(relapse)} ({inc.history[relapse]['error_rate']}%)"
+        add('gap', text + (f", after: {trigger['label']}." if trigger else '.'), [trigger and trigger['id']])
+        if healthy_at_end:
+            back = _streak_start(inc)
+            add('good', f'Checkout was healthy again from {S.clock(back)} and stayed healthy to the end.', [])
+    if not healthy_at_end and (not mitigated or relapse):
+        rate = inc.current()['error_rate']
+        add('gap', f'Checkout was still failing at {rate}% when the shift ended.' if rate > S.HEALTHY else
+            f'Checkout had not stayed healthy for 3 minutes yet when the shift ended (errors {rate}%).', [])
     add('info', f'About {round(inc.failed):,} checkouts failed during your shift ({inc.now - S.START} simulated minutes).', [])
 
     # Evidence before the first change
@@ -63,9 +94,12 @@ def summarize(inc) -> dict:
         first = rollbacks[0]
         notes = [e for e in looks if e['name'] == 'release' and e['arg'] == S.NEW and int(e['id'][1:]) < int(first['id'][1:])]
         migration = S.MIGRATION[inc.variant]
-        if notes:
+        if notes and migration['reversible']:
             add('good', f"You read the {S.NEW} release notes before rolling back (migration {migration['name']}: "
-                        f"{'reversible' if migration['reversible'] else 'irreversible'}).", [notes[0]['id'], first['id']])
+                        'reversible).', [notes[0]['id'], first['id']])
+        elif notes:
+            add('gap', f"You read the {S.NEW} release notes, which mark migration {migration['name']} as irreversible, "
+                       f"and rolled back anyway at {first['clock']}.", [notes[0]['id'], first['id']])
         else:
             add('gap', f"You rolled back at {first['clock']} without opening the {S.NEW} release notes, which list "
                        f"migration {migration['name']} ({'reversible' if migration['reversible'] else 'irreversible'}).",
@@ -136,6 +170,8 @@ def summarize(inc) -> dict:
     stats = {
         'variant': inc.variant,
         'minutes_to_mitigate': _offset(inc.mitigated_at) if inc.mitigated_at else None,
+        'relapsed': relapse is not None,
+        'healthy_at_end': healthy_at_end,
         'failed': round(inc.failed),
         'first_change': first_change and {'label': first_change['label'], 'clock': first_change['clock'],
                                           'minutes_in': _offset(first_change['minute'])},
@@ -149,8 +185,13 @@ def summarize(inc) -> dict:
 
 def compare(first: dict, second: dict) -> list[dict]:
     """Side-by-side rows for the original run and the replay, from recorded stats only."""
-    def minutes(value):
-        return 'not mitigated' if value is None else f'{value} min'
+    def minutes(stats):
+        value = stats['minutes_to_mitigate']
+        if value is None:
+            return 'not mitigated'
+        if not stats.get('healthy_at_end', True):
+            return f'{value} min, but not healthy at the end'
+        return f'{value} min' + (', with a relapse' if stats.get('relapsed') else '')
 
     def change(value):
         return '—' if not value else f"{value['label']} ({value['minutes_in']} min in)"
@@ -160,7 +201,7 @@ def compare(first: dict, second: dict) -> list[dict]:
 
     a, b = first['stats'], second['stats']
     rows = [
-        {'label': 'Time to healthy checkout', 'first': minutes(a['minutes_to_mitigate']), 'second': minutes(b['minutes_to_mitigate'])},
+        {'label': 'Time to healthy checkout', 'first': minutes(a), 'second': minutes(b)},
         {'label': 'Failed checkouts during the shift', 'first': f"{a['failed']:,}", 'second': f"{b['failed']:,}"},
         {'label': 'First change', 'first': change(a['first_change']), 'second': change(b['first_change'])},
         {'label': 'Things checked before the first change', 'first': str(a['looks_before_first_change']),

@@ -129,6 +129,18 @@ class SimulationTests(unittest.TestCase):
             with self.assertRaises(sim.CommandError):
                 call()
 
+    def test_earlier_logs_never_change_after_a_config_change(self):
+        inc = sim.Incident('A')
+        minute = S.START - 1
+        before = [l for l in inc._logs_view('checkout-api')['lines'] if l['minute'] == minute]
+        inc.act('raise_timeout')
+        inc.act('flag', 'express_pay_button')
+        after = [l for l in inc._logs_view('checkout-api')['lines'] if l['minute'] == minute]
+        self.assertTrue(before)
+        self.assertEqual(before, after)
+        self.assertTrue(inc.configs[minute]['flags']['express_pay_button'])
+        self.assertEqual(inc.configs[minute]['tax_timeout_ms'], 800)
+
 
 class FactTests(unittest.TestCase):
     def assert_refs_exist(self, inc, summary):
@@ -164,6 +176,50 @@ class FactTests(unittest.TestCase):
         self.assertIn('did not post a status update', gaps)
         self.assertIn('error rate rose', gaps)
         self.assertIn('while the error rate was', gaps)
+
+    def test_recovery_then_relapse_is_not_reported_as_recovered(self):
+        flag = ('act', 'flag', 'tax_v2_quotes')
+        inc = run('A', [flag, *waits(3), flag, *waits(2), ('resolve',)])
+        summary = facts.summarize(inc)
+        self.assert_refs_exist(inc, summary)
+        stats = summary['stats']
+        self.assertIsNotNone(stats['minutes_to_mitigate'])
+        self.assertTrue(stats['relapsed'])
+        self.assertFalse(stats['healthy_at_end'])
+        texts = ' '.join(f['text'] for f in summary['facts'])
+        self.assertIn('first became healthy', texts)
+        self.assertIn('Errors came back', texts)
+        self.assertIn('still failing', texts)
+        self.assertNotIn(' 1 minutes', texts)
+
+    def test_relapse_from_a_restart_blames_the_restart(self):
+        inc = run('A', [('act', 'flag', 'tax_v2_quotes'), *waits(3), ('act', 'restart'), *waits(2), ('resolve',)])
+        summary = facts.summarize(inc)
+        relapse = next(f for f in summary['facts'] if f['text'].startswith('Errors came back'))
+        self.assertIn('Rolling restart', relapse['text'])
+        restart = next(e for e in inc.events if e['name'] == 'restart')
+        self.assertEqual(relapse['events'], [restart['id']])
+
+    def test_recovery_relapse_recovery_ends_healthy(self):
+        flag = ('act', 'flag', 'tax_v2_quotes')
+        inc = run('A', [flag, *waits(3), flag, *waits(2), flag, *waits(3), ('resolve',)])
+        summary = facts.summarize(inc)
+        stats = summary['stats']
+        self.assertTrue(stats['relapsed'])
+        self.assertTrue(stats['healthy_at_end'])
+        good = ' '.join(f['text'] for f in summary['facts'] if f['tone'] == 'good')
+        self.assertIn('healthy again', good)
+        other = facts.summarize(run('A', [('act', 'rollback'), *waits(4), ('resolve',)]))
+        rows = facts.compare(other, summary)
+        self.assertIn('relapse', rows[0]['second'])
+
+    def test_rolling_back_after_reading_an_irreversible_migration_is_a_gap(self):
+        inc = run('B', [('look', 'release', S.NEW), ('act', 'rollback'), *waits(4)])
+        summary = facts.summarize(inc)
+        good = ' '.join(f['text'] for f in summary['facts'] if f['tone'] == 'good')
+        gaps = ' '.join(f['text'] for f in summary['facts'] if f['tone'] == 'gap')
+        self.assertNotIn('release notes', good)
+        self.assertIn('rolled back anyway', gaps)
 
     def test_compare_uses_recorded_stats(self):
         a = facts.summarize(run('A', [('act', 'rollback'), *waits(4), ('resolve',)]))

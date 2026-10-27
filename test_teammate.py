@@ -121,6 +121,19 @@ class InterpretationTests(unittest.TestCase):
         kept, _ = teammate.check_points(json.dumps({'points': [point]}), SOURCES, 'Post an update within 10 minutes.')
         self.assertEqual(len(kept), 1)
 
+    def test_invalid_kind_and_wrong_tone_are_dropped(self):
+        tones = {'F1': 'good', 'F2': 'gap', 'C1': None}
+        points = [{'kind': 'praise', 'text': 'Nice work.', 'facts': ['F1']},
+                  {'kind': 'keep', 'text': 'About 1,240 checkouts failed.', 'facts': ['F2']},
+                  {'kind': 'change', 'text': 'It took 7 min here and 12 min in the replay.', 'facts': ['C1']},
+                  {'kind': 'keep', 'text': 'You got checkout healthy 7 minutes in.', 'facts': ['F1']},
+                  {'kind': 'change', 'text': 'About 1,240 checkouts failed.', 'facts': ['F2', 'C1']},
+                  {'kind': ['keep'], 'text': 'Odd kind.', 'facts': ['F1']},
+                  {'kind': {'a': 1}, 'text': 'Odd kind.', 'facts': ['F1']}]
+        kept, dropped = teammate.check_points(json.dumps({'points': points}), SOURCES, '', tones)
+        self.assertEqual([(p['kind'], p['facts']) for p in kept], [('keep', ['F1']), ('change', ['F2', 'C1'])])
+        self.assertEqual(dropped, 5)
+
     def test_bad_format_raises(self):
         for raw in ('Sure! Here is your debrief.', '{"points": "none"}', '{broken'):
             with self.assertRaises(teammate.TeammateError):
