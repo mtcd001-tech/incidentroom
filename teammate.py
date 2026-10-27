@@ -11,6 +11,7 @@ import time
 import httpx
 
 import budget
+import plans
 import scenario as S
 
 DEFAULT_BASE_URL = 'https://api.tokenfactory.us-north1.nebius.com/v1/'
@@ -20,6 +21,7 @@ TIMEOUT = 20
 HISTORY = 8          # chat messages sent back to the model
 MAX_REPLY_CHARS = 900
 INTERPRET_TOKENS = 450
+COMPILE_TOKENS = 600
 MAX_POINTS = 3
 
 RULES = """You are a senior engineer on the checkout team at Fernway Outdoor, sitting next to a junior engineer who is on call for the first time. This is a training simulation; the company and the incident are fictional.
@@ -154,7 +156,7 @@ def debrief_context(inc, summary: dict, comparison: list | None) -> str:
     return '\n'.join(lines)
 
 
-_REF = re.compile(r'\(?\b[EFC]\d+\b\)?')
+_REF = re.compile(r'\(?\b(?:[AB]-)?[EFC]\d+\b\)?')
 _NUMBER = re.compile(r'\d+(?:[.,:]\d+)*')
 
 
@@ -194,18 +196,98 @@ def check_points(raw: str, sources: dict, common: str = '', tones: dict | None =
     return kept[:MAX_POINTS], dropped + max(0, len(kept) - MAX_POINTS)
 
 
-def interpret(inc, summary: dict, comparison: list | None, spend) -> dict:
-    messages = [{'role': 'system', 'content': INTERPRET_RULES},
-                {'role': 'user', 'content': debrief_context(inc, summary, comparison)}]
-    answer = _complete(messages, INTERPRET_TOKENS, 0.3, spend)
-    events = {e['id']: e for e in inc.events}
-    # A fact's evidence is its own text plus the timeline events it cites.
-    sources = {f['id']: ' '.join([f['text'], *(f"{events[r]['clock']} {events[r]['label']} {events[r]['detail']}"
-                                               for r in f['events'] if r in events)]) for f in summary['facts']}
-    sources.update({r['id']: f"{r['label']}: {r['first']}, {r['second']}" for r in comparison or []})
+def _fact_sources(fact_list: list, events: list) -> dict:
+    """A fact's evidence is its own text plus the timeline events it cites."""
+    by_id = {e['id']: e for e in events}
+    return {f['id']: ' '.join([f['text'], *(f"{by_id[r]['clock']} {by_id[r]['label']} {by_id[r]['detail']}"
+                                            for r in f['events'] if r in by_id)]) for f in fact_list}
+
+
+def _checked(rules: str, context: str, sources: dict, tones: dict, spend) -> dict:
+    answer = _complete([{'role': 'system', 'content': rules}, {'role': 'user', 'content': context}], INTERPRET_TOKENS, 0.3, spend)
     runbook = ' '.join(' '.join(steps) for _, steps in S.RUNBOOK)
-    tones = {f['id']: f['tone'] for f in summary['facts']}
     points, dropped = check_points(answer['text'], sources, runbook, tones)
     if not points:
-        raise TeammateError('The AI debrief could not be checked against the facts, so it is not shown.')
+        raise TeammateError('The AI explanation could not be checked against the facts, so it is not shown.')
     return {'points': points, 'dropped': dropped}
+
+
+def interpret(inc, summary: dict, comparison: list | None, spend) -> dict:
+    sources = _fact_sources(summary['facts'], inc.events)
+    sources.update({r['id']: f"{r['label']}: {r['first']}, {r['second']}" for r in comparison or []})
+    tones = {f['id']: f['tone'] for f in summary['facts']}
+    return _checked(INTERPRET_RULES, debrief_context(inc, summary, comparison), sources, tones, spend)
+
+
+# ---- plan stress test -----------------------------------------------------------------------------------------
+def _vocabulary() -> str:
+    looks = []
+    for tool, args in plans.LOOKS.items():
+        names = [a for a in args if a]
+        looks.append(f'{{"look": "{tool}"' + (f', "arg": one of {names}' if names else '') + '}')
+    acts = [f'{{"act": "{name}"}} = {plans.describe({"act": name, "arg": None})}' for name in plans.ACTS if name != 'flag']
+    flags = f'{{"act": "flag", "arg": one of {list(S.FLAGS)}, "to": "on" or "off"}}'
+    return '\n'.join(['Looks:', *looks, 'Actions:', *acts, flags, 'Wait:',
+                      f'{{"wait": true}} = watch the dashboards for {plans.sim.WAIT_MINUTES} minutes'])
+
+
+COMPILE_RULES = """You turn a junior on-call engineer's recovery plan, written in plain English, into steps for a training simulator. You are a translator, not an advisor.
+
+The incident: checkout failures started right after checkout-api {new} was deployed at 14:02 (the previous version is {old}).
+
+Rules:
+- Translate their plan exactly as written, including mistakes and unsafe steps. Never add, remove, reorder or improve steps.
+- Every step must come from words in their plan. Do not add a status update, a look or a wait they did not ask for. Something the simulator cannot do goes in "unsupported", never as a different step.
+- Use only the steps listed below.
+- Only if their plan says to decide based on whether the release's database migration can be undone, use one block: {{"if": "migration_irreversible", "then": [steps], "else": [steps]}}. "then" runs when the migration is irreversible. No other conditions, no nesting, at most one block. The simulator can only decide this after the plan has opened the {new} release notes, so do not add that look yourself; if their plan decides without reading the notes, keep it that way.
+- At most {max_steps} steps on any path.
+- "assumptions": short notes wherever you had to interpret vague wording.
+- "unsupported": parts of their plan that the simulator cannot do (for example "call my manager").
+
+Allowed steps:
+{vocabulary}
+
+Return only JSON, no other text: {{"steps": [...], "assumptions": [...], "unsupported": [...]}}"""
+
+
+def compile_plan(text: str, spend) -> dict:
+    rules = COMPILE_RULES.format(new=S.NEW, old=S.OLD, max_steps=plans.MAX_STEPS, vocabulary=_vocabulary())
+    answer = _complete([{'role': 'system', 'content': rules}, {'role': 'user', 'content': text}], COMPILE_TOKENS, 0.1, spend)
+    raw = answer['text']
+    start, end = raw.find('{'), raw.rfind('}')
+    try:
+        parsed = json.loads(raw[start:end + 1]) if start != -1 else None
+        return plans.drop_unrequested_status(plans.validate(parsed), text)
+    except (ValueError, TypeError, AttributeError) as exc:   # JSONDecodeError and PlanError are ValueErrors
+        reason = str(exc) if isinstance(exc, plans.PlanError) else 'the AI answer was not a valid plan'
+        raise TeammateError(f'Could not turn that into simulator steps: {reason} Try rewording your plan.')
+
+
+EXPLAIN_RULES = """You are a senior engineer explaining to a junior engineer how their recovery plan did when a training simulator ran it, unchanged, on two versions of the same outage: A, where the release's database migration is reversible, and B, where it is irreversible so rolling back breaks checkout. The facts were computed by the simulator and are correct.
+
+Rules:
+- Write 2 or 3 points. Each point is one or two sentences of plain English.
+- Every point must list the IDs it is based on: A-F1, B-F2 and so on, or C1, C2 for comparison rows.
+- A "keep" point must cite at least one fact tagged [good]; a "change" point must cite at least one fact tagged [gap].
+- Use only numbers and times that appear in the facts you cite, the events they are based on, or the comparison rows.
+- Explain which part of the plan caused the difference between A and B, and what to change in the plan. Do not write a new plan for them.
+Return only JSON, no other text: {"points": [{"kind": "keep" or "change", "text": "...", "facts": ["B-F2"]}]}"""
+
+
+def explain_plan(plan: dict, results: dict, spend) -> dict:
+    lines = ['The plan as run:'] + [f"{line['n'] or ''} {line['text']}".strip() for line in plans.outline(plan)]
+    sources, tones = {}, {}
+    for variant in 'AB':
+        result = results[variant]
+        lines += ['', f'Version {variant} ({"reversible" if variant == "A" else "irreversible"} migration):']
+        if result['stopped']:
+            lines.append(f"The plan stopped early: {result['stopped']}")
+        lines += [f"{t['n']} {t['text']}" + (f" ({t['note']})" if t['note'] else '') for t in result['trace']]
+        lines += [f"{f['id']} [{f['tone']}] {f['text']}" for f in result['facts']]
+        sources.update(_fact_sources(result['facts'], result['events']))
+        tones.update({f['id']: f['tone'] for f in result['facts']})
+    lines += ['', 'Comparison (first = A, second = B):']
+    lines += [f"{r['id']} {r['label']}: A {r['first']}, B {r['second']}" for r in results['comparison']]
+    sources.update({r['id']: f"{r['label']}: {r['first']}, {r['second']}" for r in results['comparison']})
+    return _checked(EXPLAIN_RULES, '\n'.join(lines), sources, tones, spend)
+

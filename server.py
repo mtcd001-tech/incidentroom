@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 import budget
 import facts
+import plans
 import scenario as S
 import sim
 import teammate
@@ -29,6 +30,7 @@ RUN_TTL = 3 * 60 * 60
 MAX_CHAT = 12   # trainee messages per run; each one is a paid model call
 MAX_INTERPRET = 2   # debrief interpretation attempts per run (the second only when the trainee clicks "Try again")
 RUNS_PER_HOUR = 30  # new runs per visitor per hour
+MAX_PLANS = 4       # stress-tested plans per run (each compile is one paid call)
 
 runs: dict[str, dict] = {}
 _new_runs: dict[str, deque] = {}
@@ -56,6 +58,10 @@ class Act(BaseModel):
 
 class Chat(BaseModel):
     text: str = Field(min_length=1, max_length=500)
+
+
+class PlanText(BaseModel):
+    text: str = Field(min_length=1, max_length=800)
 
 
 def _visitor(request: Request) -> str:
@@ -115,7 +121,28 @@ def _payload(run: dict, result: dict | None = None) -> dict:
         body['interpretation'] = run['interpretation']
         body['interpret_left'] = MAX_INTERPRET - run['interpret_tries']
         body['interpret_tried'] = run['interpret_tries'] > 0   # the page asks automatically only before the first try
+        body['plans'] = [_plan_view(run, plan) for plan in run['plans']]
+        body['plans_left'] = MAX_PLANS - len(run['plans'])
     return body
+
+
+def _plan_view(run: dict, plan: dict) -> dict:
+    view = {k: plan[k] for k in ('n', 'text', 'outline', 'assumptions', 'unsupported', 'results', 'explanation', 'explain_tried')}
+    earlier = [p for p in run['plans'] if p['n'] < plan['n'] and p['results']]
+    if plan['results'] and earlier:
+        prev = earlier[-1]
+        view['versus'] = {'previous': prev['n'], **{v: plans.compare(prev['results'][v]['stats'], plan['results'][v]['stats'],
+                                                                    (f"Plan {prev['n']}", f"Plan {plan['n']}")) for v in 'AB'}}
+    return view
+
+
+def _plan(run: dict, n: int) -> dict:
+    if not run['incident'].ended:
+        raise HTTPException(400, 'Plans can be stress-tested after the shift ends.')
+    match = [p for p in run['plans'] if p['n'] == n]
+    if not match:
+        raise HTTPException(404, 'Unknown plan.')
+    return match[0]
 
 
 def _debrief(run: dict) -> tuple[dict, list | None]:
@@ -156,7 +183,8 @@ def new_run(body: NewRun, request: Request):
     _prune()
     previous = body.previous if body.previous in runs else None
     run = {'id': secrets.token_urlsafe(16), 'incident': sim.Incident(body.variant), 'previous': previous, 'chat': [],
-           'interpretation': None, 'interpret_tries': 0, 'touched': time.time()}
+           'interpretation': None, 'interpret_tries': 0, 'plans': [],
+           'touched': time.time()}
     runs[run['id']] = run
     return _payload(run)
 
@@ -221,6 +249,53 @@ def interpret(run_id: str, request: Request):
     summary, comparison = _debrief(run)
     try:
         run['interpretation'] = teammate.interpret(run['incident'], summary, comparison, _spend(request))
+    except teammate.TeammateError as exc:
+        raise HTTPException(503, str(exc))
+    return _payload(run)
+
+
+@app.post('/api/runs/{run_id}/plans')
+def compile_plan(run_id: str, body: PlanText, request: Request):
+    """Nemotron turns the trainee's words into simulator steps, keeping their mistakes. Nothing runs yet."""
+    run = _get(run_id)
+    if not run['incident'].ended:
+        raise HTTPException(400, 'Plans can be stress-tested after the shift ends.')
+    if len(run['plans']) >= MAX_PLANS:
+        raise HTTPException(429, 'You have used all plan tests for this run.')
+    text = ' '.join(body.text.split())
+    try:
+        plan = teammate.compile_plan(text, _spend(request))
+    except teammate.TeammateError as exc:
+        raise HTTPException(503, str(exc))
+    run['plans'].append({'n': len(run['plans']) + 1, 'text': text, 'plan': plan, 'outline': plans.outline(plan),
+                         'assumptions': plan['assumptions'], 'unsupported': plan['unsupported'], 'results': None,
+                         'explanation': None, 'explain_tried': False})
+    return _payload(run)
+
+
+@app.post('/api/runs/{run_id}/plans/{n}/run')
+def run_plan(run_id: str, n: int):
+    """Run the approved plan on fresh copies of both variants. Pure simulation, no model call."""
+    run = _get(run_id)
+    plan = _plan(run, n)
+    if not plan['results']:
+        plan['results'] = plans.stress_test(plan['plan'])
+    return _payload(run)
+
+
+@app.post('/api/runs/{run_id}/plans/{n}/explain')
+def explain_plan(run_id: str, n: int, request: Request):
+    run = _get(run_id)
+    plan = _plan(run, n)
+    if not plan['results']:
+        raise HTTPException(400, 'Run the plan first.')
+    if plan['explanation']:
+        return _payload(run)
+    if plan['explain_tried']:
+        raise HTTPException(429, 'The AI explanation for this plan was already tried.')
+    plan['explain_tried'] = True
+    try:
+        plan['explanation'] = teammate.explain_plan(plan['plan'], plan['results'], _spend(request))
     except teammate.TeammateError as exc:
         raise HTTPException(503, str(exc))
     return _payload(run)

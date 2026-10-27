@@ -5,6 +5,7 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import plans
 import server
 import teammate
 
@@ -151,6 +152,47 @@ class ServerTests(unittest.TestCase):
             server.RUNS_PER_HOUR = old
             server._new_runs.clear()
         self.assertEqual(codes, [200, 200, 429])
+
+    def test_plan_stress_test_flow(self):
+        rid = self.start()['id']
+        rollback = plans.validate({'steps': [{'act': 'rollback'}, {'wait': True}], 'unsupported': ['Call my manager']})
+        self.assertEqual(self.client.post(f'/api/runs/{rid}/plans', json={'text': 'roll back'}).status_code, 400)
+        self.client.post(f'/api/runs/{rid}/resolve')
+        with mock.patch.object(teammate, 'compile_plan', return_value=rollback) as compile_plan:
+            body = self.client.post(f'/api/runs/{rid}/plans', json={'text': '  If checkout fails,  roll back. '}).json()
+        self.assertEqual(compile_plan.call_args.args[0], 'If checkout fails, roll back.')
+        plan = body['plans'][0]
+        self.assertIsNone(plan['results'])
+        self.assertEqual(plan['unsupported'], ['Call my manager'])
+        self.assertEqual(body['plans_left'], server.MAX_PLANS - 1)
+        ran = self.client.post(f'/api/runs/{rid}/plans/1/run').json()['plans'][0]
+        self.assertEqual(plans.verdict(ran['results']['B']['stats']), 'broke checkout')
+        explanation = {'points': [{'kind': 'change', 'text': 'Check the migration first.', 'facts': ['B-F2']}], 'dropped': 0}
+        with mock.patch.object(teammate, 'explain_plan', return_value=explanation) as explain:
+            first = self.client.post(f'/api/runs/{rid}/plans/1/explain').json()
+            self.client.post(f'/api/runs/{rid}/plans/1/explain')
+        explain.assert_called_once()
+        self.assertEqual(first['plans'][0]['explanation'], explanation)
+
+        better = plans.validate({'steps': [{'look': 'release', 'arg': 'v2.14.0'},
+                                           {'if': 'migration_irreversible', 'then': [{'act': 'flag', 'arg': 'tax_v2_quotes', 'to': 'off'}],
+                                            'else': [{'act': 'rollback'}]}]})
+        with mock.patch.object(teammate, 'compile_plan', return_value=better):
+            self.client.post(f'/api/runs/{rid}/plans', json={'text': 'check first'})
+        second = self.client.post(f'/api/runs/{rid}/plans/2/run').json()['plans'][1]
+        self.assertEqual(second['versus']['previous'], 1)
+        self.assertEqual(second['versus']['B'][0]['second'], 'recovered and stayed healthy')
+        self.assertEqual(self.client.post(f'/api/runs/{rid}/plans/9/run').status_code, 404)
+
+    def test_plan_compile_failure_and_cap(self):
+        rid = self.start()['id']
+        self.client.post(f'/api/runs/{rid}/resolve')
+        with mock.patch.object(teammate, 'compile_plan', side_effect=teammate.TeammateError('nope')):
+            self.assertEqual(self.client.post(f'/api/runs/{rid}/plans', json={'text': 'x'}).status_code, 503)
+        plan = plans.validate({'steps': [{'wait': True}]})
+        with mock.patch.object(teammate, 'compile_plan', return_value=plan):
+            codes = [self.client.post(f'/api/runs/{rid}/plans', json={'text': 'x'}).status_code for _ in range(server.MAX_PLANS + 1)]
+        self.assertEqual(codes, [200] * server.MAX_PLANS + [429])
 
     def test_replay_comparison_rows_have_ids(self):
         rid = self.start()['id']

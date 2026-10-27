@@ -289,6 +289,10 @@ class Incident:
         self.ended = 'resolved'
         return {'event': event['id']}
 
+    def run_until(self, minute: int):
+        """Let simulated time pass with no new command (used to measure plans over a fixed window)."""
+        self._advance(max(0, minute - self.now))
+
     def _require_open(self):
         if self.ended:
             raise CommandError('This shift has ended.')

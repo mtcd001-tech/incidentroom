@@ -11,6 +11,7 @@ You're on call for checkout at a fictional shop. Checkout is failing for about o
 - **The replay lives in the scenario.** In the replay, the release notes, database logs and the rollback's actual effect all change. It is not a prompt instruction.
 - **A Nemotron teammate coaches, it doesn't solve.** You can talk the incident through with an AI teammate (NVIDIA Nemotron via Nebius Token Factory). It only sees what you have seen: the briefing, the runbook, the status bar and your own timeline, never the hidden cause. It answers with questions about evidence and risk, and it never decides whether an action works. Talking costs no simulated time and is not written to the timeline.
 - **Evidence-linked debrief.** Every point in the debrief cites the timeline events it is based on (for example `E4`), and the replay is compared with the original run using recorded stats only.
+- **Stress-test your plan.** After the debrief, write what you would do next time in plain English ("if checkout fails after a deploy, roll back"). Nemotron translates it into simulator steps, keeping your plan as written, even its mistakes, and lists anything it had to assume or could not translate. You approve the steps; the simulator runs that exact plan on fresh copies of both versions of the outage (migration reversible / irreversible) over the same 20 minutes and shows the results side by side. Revise the plan and compare it with the previous one. "Your plan worked once. Here is the condition that breaks it."
 - **The AI interpretation is checked, and kept apart from the facts.** After the shift, Nemotron writes a short "Coach's read" (what to keep doing, what to change next time). Every point must cite fact IDs (`F2`, or `C1` for comparison rows). The server drops any point that cites an unknown ID or uses a number or time that is not in the cited facts, their timeline events or the runbook. It is shown in its own panel, labelled as AI.
 
 ## Status
@@ -20,6 +21,7 @@ You're on call for checkout at a fictional shop. Checkout is failing for about o
 | Simulation, both scenario variants, timeline, debrief facts, replay comparison | Working; covered by unit and API tests |
 | Nemotron teammate (discusses hypotheses, asks for evidence) | Working; mocked tests, and checked with live Nemotron calls in a local browser |
 | Nemotron interpretation layer for the debrief (cites the facts, kept separate from them) | Working; mocked tests, and checked with live Nemotron calls in a local browser |
+| Plan Stress Test (Nemotron translates and explains; the simulator runs the plan) | Working; unit and API tests with a mocked model, and checked with live calls in a local browser |
 | Hosted demo | Not deployed yet |
 
 ## Run it locally
@@ -68,12 +70,12 @@ Every model call first reserves its worst-case cost (prompt bytes as an upper bo
 
 Each visitor can run one model call at a time and start 30 shifts per hour.
 
-How the call is made: one OpenAI-compatible `chat/completions` request per message, with Nemotron's thinking turned off (`chat_template_kwargs: {"enable_thinking": false}`) for fast, short replies, `max_tokens` 220, a 20-second timeout and no retries. Each run allows 12 teammate messages. The debrief read is one call per run (450 `max_tokens`), saved once it succeeds; if it fails, the trainee can press "Try again" once.
+How the call is made: one OpenAI-compatible `chat/completions` request per message, with Nemotron's thinking turned off (`chat_template_kwargs: {"enable_thinking": false}`) for fast, short replies, `max_tokens` 220, a 20-second timeout and no retries. Plans: one compile call per plan (600 `max_tokens`, at most 4 plans per run) and one explanation call per plan. The model's plan must pass strict validation before anything runs: only simulator steps, at most one `if migration_irreversible` decision, no nesting, at most 8 steps per path. Each run allows 12 teammate messages. The debrief read is one call per run (450 `max_tokens`), saved once it succeeds; if it fails, the trainee can press "Try again" once.
 
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m unittest test_sim test_server test_teammate test_budget
+.venv\Scripts\python -m unittest test_sim test_server test_teammate test_budget test_plans
 ```
 
 The tests replace the model with a fake, so they never make a paid call.
@@ -86,6 +88,7 @@ The tests replace the model with a fake, so they never make a paid call.
 | `sim.py` | Deterministic simulation: state, metrics, logs, actions, timeline |
 | `facts.py` | Debrief facts with event citations, and the run-vs-replay comparison |
 | `teammate.py` | Nemotron teammate and debrief read: what the model may see, its rules, the Token Factory call, and the citation check |
+| `plans.py` | Recovery plans: strict validation of the model's JSON, deterministic execution on both variants, comparisons |
 | `budget.py` | Spending guard: reserve before each model call, settle after, daily/total/judge caps |
 | `server.py` | FastAPI app and JSON API |
 | `static/` | The web interface |

@@ -5,7 +5,8 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&
 const clock = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const fmt = (value, unit) => unit === 'ms' ? `${Number(value).toLocaleString('en-US')} ms` : unit === '%' ? `${value}%` : String(value);
 
-const state = { id: null, data: null, look: null, confirm: null, busy: false, briefings: null, asking: null, reading: null };
+const state = { id: null, data: null, look: null, confirm: null, busy: false, briefings: null, asking: null, reading: null,
+  compiling: false, explaining: {} };
 
 function remember(id) {
   try { id ? sessionStorage.setItem('incident-run', id) : sessionStorage.removeItem('incident-run'); } catch (_) { /* storage unavailable */ }
@@ -55,8 +56,9 @@ function accept(data) {
 }
 
 function show(section) {
+  const changed = $(`#${section}`).hidden;
   for (const id of ['intro', 'console', 'debrief']) $(`#${id}`).hidden = id !== section;
-  window.scrollTo({ top: 0 });
+  if (changed) window.scrollTo({ top: 0 });
 }
 
 // ---------- rendering -------------------------------------------------------------------------------------
@@ -235,7 +237,106 @@ function renderDebrief() {
   $('#replay-cta').hidden = v.variant !== 'A';
   renderRead();
   if (!data.interpretation && !data.interpret_tried && (!state.reading || state.reading.id !== data.id)) readDebrief(data.id);
+  renderStress();
 }
+
+// ---------- plan stress test ------------------------------------------------------------------------------
+function renderStress() {
+  const d = state.data;
+  $('#plans-left').textContent = d.plans_left ? `${d.plans_left} plan test${d.plans_left === 1 ? '' : 's'} left for this run` : 'No plan tests left for this run';
+  $('#plan-compile').disabled = !d.plans_left || state.compiling;
+  $('#plan-compile').textContent = state.compiling ? 'Nemotron is translating…' : 'Turn into steps';
+  $('#plan-list').innerHTML = d.plans.map(planHtml).join('');
+  for (const p of d.plans) {
+    const key = `${d.id}:${p.n}`;
+    if (p.results && !p.explanation && !p.explain_tried && !state.explaining[key]) explainPlan(d.id, p.n);
+  }
+}
+
+function planHtml(p) {
+  const id = `plan${p.n}`;
+  const steps = `<ol class="plan-steps">${p.outline.map((l) => `<li class="${l.branch ? 'branch' : ''}"><span class="n">${esc(l.n ?? '')}</span><span>${esc(l.text)}</span></li>`).join('')}</ol>`;
+  const notes = [...p.assumptions.map((a) => ['Assumed', a]), ...p.unsupported.map((u) => ['Not in the simulator', u])];
+  const noteHtml = notes.length ? `<ul class="plan-notes">${notes.map(([k, v]) => `<li><b>${esc(k)}:</b> ${esc(v)}</li>`).join('')}</ul>` : '';
+  let body = '';
+  if (!p.results) {
+    body = `<div class="plan-actions"><button class="btn primary" data-plan-run="${esc(p.n)}">These steps are right: run on A and B</button>
+      <button class="btn" data-plan-rewrite="${esc(p.n)}">Rewrite my plan</button></div>`;
+  } else {
+    const r = p.results;
+    body = `<div class="plan-cols">${['A', 'B'].map((v) => planColumn(id, v, r[v])).join('')}</div>
+      <table class="plan-compare"><thead><tr><th scope="col"></th><th scope="col">A: migration can be undone</th><th scope="col">B: migration cannot be undone</th></tr></thead>
+      <tbody>${r.comparison.map((c) => `<tr id="${id}-${esc(c.id)}"><td><span class="fid">${esc(c.id)}</span> ${esc(c.label)}</td><td>${esc(c.first)}</td><td>${esc(c.second)}</td></tr>`).join('')}</tbody></table>
+      ${explainHtml(p)}${versusHtml(p)}
+      <div class="plan-actions"><button class="btn" data-plan-rewrite="${esc(p.n)}">Revise this plan</button></div>`;
+  }
+  return `<article class="plan" id="${id}"><div class="plan-head"><b>Plan ${esc(p.n)}</b><q>${esc(p.text)}</q></div>${steps}${noteHtml}${body}</article>`;
+}
+
+function planColumn(id, v, r) {
+  const s = r.stats;
+  const tone = s.verdict === 'recovered and stayed healthy' ? 'good' : s.verdict === 'broke checkout' ? 'bad' : 'mid';
+  const stats = [['Time to healthy', s.minutes_to_mitigate === null ? 'not reached' : `${s.minutes_to_mitigate} min`],
+    [`Failed checkouts (${s.window} min)`, s.failed.toLocaleString('en-US')], ['Error rate at the end', `${s.final_error_rate}%`]];
+  return `<div class="plan-col"><h3>Version ${v}</h3><span class="verdict ${tone}">${esc(s.verdict)}</span>
+    <dl>${stats.map(([k, val]) => `<div><dt>${esc(k)}</dt><dd>${esc(val)}</dd></div>`).join('')}</dl>
+    ${r.stopped ? `<p class="plan-stop">${esc(r.stopped)}</p>` : ''}
+    <ol class="trace">${r.trace.map((t) => `<li><span class="n">${esc(t.n)}</span><span>${esc(t.text)}${t.note ? `<small>${esc(t.note)}</small>` : ''}</span></li>`).join('')}</ol>
+    <details class="plan-facts"><summary>Facts from this run (${r.facts.length})</summary><ul class="facts">${r.facts.map((f) =>
+      `<li class="fact ${esc(f.tone)}" id="${id}-${esc(f.id)}"><span class="tone">${esc(f.id)}</span><p>${esc(f.text)}</p></li>`).join('')}</ul></details></div>`;
+}
+
+function explainHtml(p) {
+  const key = `${state.data.id}:${p.n}`;
+  const head = '<div class="panel-head"><h3>Why</h3><span class="source">AI interpretation (Nemotron). Citation IDs and numeric values checked; reasoning may still be wrong.</span></div>';
+  if (p.explanation) {
+    const kinds = { keep: 'Keep in your plan', change: 'Change in your plan' };
+    return `<div class="plan-why">${head}<ul class="facts">${p.explanation.points.map((pt) => `<li class="fact ${pt.kind === 'keep' ? 'good' : 'next'}">
+      <span class="tone">${esc(kinds[pt.kind])}</span><p>${esc(pt.text)}</p>
+      <div class="refs">${pt.facts.map((f) => `<button class="ref" data-plan-cite="plan${esc(p.n)}-${esc(f)}">${esc(f)}</button>`).join('')}</div></li>`).join('')}</ul></div>`;
+  }
+  const status = state.explaining[key];
+  const text = status === 'busy' ? 'Nemotron is explaining the difference…'
+    : `${status && status !== 'busy' ? status : 'The AI explanation is not available for this plan.'} The results above are complete without it.`;
+  return `<div class="plan-why">${head}<p class="read-note">${esc(text)}</p></div>`;
+}
+
+function versusHtml(p) {
+  if (!p.versus) return '';
+  const [a, b] = [p.versus.A, p.versus.B];
+  const cols = a[0].columns;
+  return `<div class="plan-versus"><h3>${esc(cols[0])} vs ${esc(cols[1])}</h3><table class="plan-compare"><thead><tr><th scope="col"></th>
+    <th scope="col">A · ${esc(cols[0])}</th><th scope="col">A · ${esc(cols[1])}</th><th scope="col">B · ${esc(cols[0])}</th><th scope="col">B · ${esc(cols[1])}</th></tr></thead>
+    <tbody>${a.map((row, i) => `<tr><td>${esc(row.label)}</td><td>${esc(row.first)}</td><td>${esc(row.second)}</td><td>${esc(b[i].first)}</td><td>${esc(b[i].second)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+async function explainPlan(id, n) {
+  const key = `${id}:${n}`;
+  state.explaining[key] = 'busy';
+  try {
+    const data = await api(`/api/runs/${id}/plans/${n}/explain`, {});
+    state.explaining[key] = 'done';
+    if (state.id === id) accept(data);
+  } catch (err) {
+    state.explaining[key] = err.message;
+    if (state.id === id && state.data.view.ended) renderStress();
+  }
+}
+
+const compilePlan = (text) => run(async () => {
+  state.compiling = true;
+  renderStress();
+  try {
+    accept(await api(`/api/runs/${state.id}/plans`, { text }));
+    $('#plan-text').value = '';
+    const last = state.data.plans[state.data.plans.length - 1];
+    if (last) document.getElementById(`plan${last.n}`).scrollIntoView({ block: 'start', behavior: 'smooth' });
+  } finally {
+    state.compiling = false;
+    if (state.data && state.data.view.ended) renderStress();
+  }
+});
+const runPlan = (n) => run(async () => { accept(await api(`/api/runs/${state.id}/plans/${n}/run`, {})); });
 
 function renderRead() {
   const data = state.data, body = $('#db-read-body');
@@ -310,6 +411,22 @@ document.addEventListener('click', (event) => {
     else act(state.confirm.action, state.confirm.arg, '');
   } else if (t.id === 'confirm-no') { state.confirm = null; renderActions(); }
   else if (t.id === 'read-again') readDebrief(state.id);
+  else if (t.dataset.planRun) runPlan(t.dataset.planRun);
+  else if (t.dataset.planRewrite) {
+    const plan = state.data.plans.find((p) => String(p.n) === t.dataset.planRewrite);
+    $('#plan-text').value = plan ? plan.text : '';
+    $('#plan-text').focus();
+    $('#plan-form').scrollIntoView({ block: 'center', behavior: 'smooth' });
+  } else if (t.dataset.planCite) {
+    const item = document.getElementById(t.dataset.planCite);
+    if (item) {
+      const details = item.closest('details');
+      if (details) details.open = true;
+      item.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      item.classList.add('flash');
+      setTimeout(() => item.classList.remove('flash'), 1600);
+    }
+  }
   else if (t.dataset.cite) {
     const item = document.getElementById(`db-fact-${t.dataset.cite}`) || document.getElementById(`db-compare-${t.dataset.cite}`);
     if (item) {
@@ -345,6 +462,11 @@ $('#resolve').addEventListener('click', () => {
   state.confirm = { action: 'resolve', arg: null, label: 'Declare the incident resolved and end your shift', delay: 0 };
   renderActions();
   $('#confirm-yes').focus();
+});
+$('#plan-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const text = $('#plan-text').value.trim();
+  if (text) compilePlan(text);
 });
 $('#chat-form').addEventListener('submit', (event) => {
   event.preventDefault();

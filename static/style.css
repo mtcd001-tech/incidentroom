@@ -200,6 +200,44 @@ h3 { font-size: 15px; margin: 6px 0 4px; }
 .fact.flash, .compare tr.flash td { background: var(--amber-bg); }
 .fid { font: 12px var(--mono); color: var(--faint); margin-right: 4px; }
 .compare { margin-top: 16px; }
+
+/* Plan stress test */
+.stress { margin-top: 16px; border-color: #5b4720; }
+.stress-intro { color: var(--muted); margin: 0 0 12px; max-width: 80ch; }
+.stress-intro b { color: var(--ink); }
+#plan-text { width: 100%; background: #0a0d10; border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: vertical; }
+.plan { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
+.plan-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.plan-head q { color: var(--muted); }
+.plan-steps, .trace { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.plan-steps li, .trace li { display: grid; grid-template-columns: 34px 1fr; gap: 8px; font-size: 14px; }
+.plan-steps li.branch { padding-left: 22px; }
+.plan-steps .n, .trace .n { font-family: var(--mono); color: var(--faint); font-size: 12px; padding-top: 2px; }
+.trace small { display: block; color: var(--faint); font-size: 12px; }
+.plan-notes { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.plan-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.plan-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.plan-col { background: var(--panel-2); border-radius: 8px; padding: 12px; min-width: 0; }
+.plan-col h3 { margin: 0 0 6px; }
+.verdict { display: inline-block; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; padding: 3px 10px; border-radius: 99px; }
+.verdict.good { background: var(--green-bg); color: var(--green); }
+.verdict.bad { background: var(--red-bg); color: var(--red); }
+.verdict.mid { background: var(--amber-bg); color: var(--amber); }
+.plan-col dl { display: grid; gap: 4px; margin: 10px 0; }
+.plan-col dl div { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.plan-col dt { color: var(--faint); }
+.plan-col dd { margin: 0; font-family: var(--mono); }
+.plan-stop { background: var(--amber-bg); color: #f6dca3; border-radius: 6px; padding: 6px 10px; font-size: 13px; margin: 8px 0; }
+.plan-facts { margin-top: 10px; font-size: 13px; }
+.plan-facts summary { cursor: pointer; color: var(--muted); }
+.plan-facts .facts { margin-top: 8px; }
+.plan-compare { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+.plan-compare th, .plan-compare td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.plan-compare th { color: var(--faint); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+.plan-compare tr.flash td { background: var(--amber-bg); }
+.plan-why, .plan-versus { margin-top: 14px; }
+.plan-why h3, .plan-versus h3 { margin: 0; }
+.plan-versus { overflow-x: auto; }
 .compare table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .compare th, .compare td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .compare th { color: var(--faint); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
@@ -216,6 +254,7 @@ h3 { font-size: 15px; margin: 6px 0 4px; }
   .statusbar { grid-template-columns: repeat(2, 1fr); }
   .statusbar .sb-item:first-child { grid-column: 1 / -1; }
   .stats { grid-template-columns: repeat(2, 1fr); }
+  .plan-cols { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
   main { padding: 16px; }
